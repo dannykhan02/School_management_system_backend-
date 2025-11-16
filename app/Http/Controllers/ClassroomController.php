@@ -6,106 +6,194 @@ use App\Models\Classroom;
 use App\Models\Teacher;
 use App\Models\School;
 use App\Models\Stream;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class ClassroomController extends Controller
 {
     /**
-     * Display a listing of the classrooms.
+     * Get the current user (mock if not logged in).
      */
-    public function index(Request $request)
+    private function getUser(Request $request)
     {
+        // If Sanctum or session user is available
         $user = Auth::user();
-        
-        $classrooms = Classroom::with(['school', 'teacher', 'students', 'streams'])
-            ->where('school_id', $user->school_id)
-            ->get();
-        
-        return response()->json($classrooms);
+
+        // For testing in Postman (no Sanctum) - ONLY if no authenticated user exists
+        if (!$user && $request->has('school_id')) {
+            $user = User::where('school_id', $request->school_id)->first();
+        }
+
+        return $user;
     }
 
     /**
-     * Store a newly created classroom in storage.
+     * Display a listing of classrooms.
+     */
+    public function index(Request $request)
+    {
+        $user = $this->getUser($request);
+        
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
+        }
+
+        if (!$user->school_id) {
+            return response()->json(['message' => 'User is not associated with any school.'], 400);
+        }
+
+        $classrooms = Classroom::with(['school', 'teacher.user', 'students', 'streams'])
+            ->where('school_id', $user->school_id)
+            ->get();
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $classrooms
+        ]);
+    }
+
+    /**
+     * Store a newly created classroom.
      */
     public function store(Request $request)
     {
-        $user = Auth::user();
+        $user = $this->getUser($request);
+        
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
+        }
 
-        // Validate request data
         $validated = $request->validate([
             'class_name' => 'required|string|max:255',
             'class_teacher_id' => 'nullable|integer|exists:teachers,id',
             'capacity' => 'nullable|integer|min:1',
+            'school_id' => 'required|integer|exists:schools,id'
         ]);
 
-        // Optional: check if the teacher belongs to the same school
+        // Verify the school_id matches the user's school
+        if ($validated['school_id'] != $user->school_id) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'You can only create classrooms for your own school.'
+            ], 403);
+        }
+
         if (isset($validated['class_teacher_id'])) {
             $teacher = Teacher::find($validated['class_teacher_id']);
+            
+            if (!$teacher) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'The specified teacher does not exist.'
+                ], 404);
+            }
+            
             if ($teacher->school_id !== $user->school_id) {
                 return response()->json([
                     'status' => 'error',
-                    'message' => 'The teacher does not belong to your school.'
+                    'message' => 'The selected teacher does not belong to your school.'
                 ], 422);
             }
         }
 
-        // Create classroom
         $classroom = Classroom::create([
             'class_name' => $validated['class_name'],
             'class_teacher_id' => $validated['class_teacher_id'] ?? null,
             'capacity' => $validated['capacity'] ?? null,
-            'school_id' => $user->school_id,
+            'school_id' => $validated['school_id'],
         ]);
 
         return response()->json([
-            'message' => 'Classroom created successfully',
-            'data' => $classroom->load(['school', 'teacher', 'streams'])
+            'status' => 'success',
+            'message' => 'Classroom created successfully.',
+            'data' => $classroom->load(['school', 'teacher.user', 'streams'])
         ], 201);
     }
 
     /**
      * Display the specified classroom.
      */
-    public function show($id)
+    public function show(Request $request, $id)
     {
-        $user = Auth::user();
-        $classroom = Classroom::with(['school', 'teacher', 'students', 'streams'])->findOrFail($id);
+        $user = $this->getUser($request);
         
-        // Check if classroom belongs to user's school
-        if ($classroom->school_id !== $user->school_id) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
         }
-        
-        return response()->json($classroom);
+
+        try {
+            $classroom = Classroom::with(['school', 'teacher.user', 'students', 'streams'])->findOrFail($id);
+        } catch (ModelNotFoundException $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No classroom found with the specified ID.'
+            ], 404);
+        }
+
+        if ($classroom->school_id !== $user->school_id) {
+            return response()->json(['message' => 'Unauthorized access to this classroom.'], 403);
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $classroom
+        ]);
     }
 
     /**
-     * Update the specified classroom in storage.
+     * Update the specified classroom.
      */
     public function update(Request $request, $id)
     {
-        $user = Auth::user();
-        $classroom = Classroom::findOrFail($id);
+        $user = $this->getUser($request);
         
-        // Check if classroom belongs to user's school
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
+        }
+
+        try {
+            $classroom = Classroom::findOrFail($id);
+        } catch (ModelNotFoundException $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No classroom found with the specified ID.'
+            ], 404);
+        }
+
         if ($classroom->school_id !== $user->school_id) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+            return response()->json(['message' => 'Unauthorized. This classroom does not belong to your school.'], 403);
         }
 
         $validated = $request->validate([
             'class_name' => 'sometimes|required|string|max:255',
             'class_teacher_id' => 'nullable|exists:teachers,id',
             'capacity' => 'nullable|integer|min:1',
+            'school_id' => 'sometimes|required|integer|exists:schools,id'
         ]);
 
-        // If a teacher is assigned, verify they belong to the same school
+        // Verify the school_id (if provided) matches
+        if (isset($validated['school_id']) && $validated['school_id'] != $user->school_id) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'You cannot change the school of a classroom.'
+            ], 403);
+        }
+
         if (isset($validated['class_teacher_id']) && !empty($validated['class_teacher_id'])) {
             $teacher = Teacher::find($validated['class_teacher_id']);
             
-            if ($teacher && $teacher->school_id !== $classroom->school_id) {
+            if (!$teacher) {
                 return response()->json([
-                    'message' => 'The assigned teacher must belong to the same school'
+                    'status' => 'error',
+                    'message' => 'The specified teacher does not exist.'
+                ], 404);
+            }
+            
+            if ($teacher->school_id !== $classroom->school_id) {
+                return response()->json([
+                    'message' => 'The assigned teacher must belong to the same school.'
                 ], 422);
             }
         }
@@ -113,27 +201,42 @@ class ClassroomController extends Controller
         $classroom->update($validated);
 
         return response()->json([
-            'message' => 'Classroom updated successfully',
-            'data' => $classroom->load(['school', 'teacher', 'streams'])
+            'status' => 'success',
+            'message' => 'Classroom updated successfully.',
+            'data' => $classroom->load(['school', 'teacher.user', 'streams'])
         ]);
     }
 
     /**
-     * Remove the specified classroom from storage.
+     * Remove the specified classroom.
      */
-    public function destroy($id)
+    public function destroy(Request $request, $id)
     {
-        $user = Auth::user();
-        $classroom = Classroom::findOrFail($id);
+        $user = $this->getUser($request);
         
-        // Check if classroom belongs to user's school
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
+        }
+
+        try {
+            $classroom = Classroom::findOrFail($id);
+        } catch (ModelNotFoundException $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No classroom found with the specified ID.'
+            ], 404);
+        }
+
         if ($classroom->school_id !== $user->school_id) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+            return response()->json(['message' => 'Unauthorized. This classroom does not belong to your school.'], 403);
         }
 
         $classroom->delete();
 
-        return response()->json(['message' => 'Classroom deleted successfully']);
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Classroom deleted successfully.'
+        ]);
     }
 
     /**
@@ -141,30 +244,55 @@ class ClassroomController extends Controller
      */
     public function assignTeacher(Request $request, $classroomId)
     {
-        $classroom = Classroom::findOrFail($classroomId);
+        $user = $this->getUser($request);
         
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
+        }
+
+        try {
+            $classroom = Classroom::findOrFail($classroomId);
+        } catch (ModelNotFoundException $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No classroom found with the specified ID.'
+            ], 404);
+        }
+
+        if ($classroom->school_id !== $user->school_id) {
+            return response()->json(['message' => 'Unauthorized. You cannot modify a classroom from another school.'], 403);
+        }
+
         $validated = $request->validate([
-            'teacher_id' => 'required|exists:teachers,id',
+            'teacher_id' => 'required|integer',
         ]);
 
-        $teacher = Teacher::findOrFail($validated['teacher_id']);
+        // Check if teacher exists first
+        $teacher = Teacher::find($validated['teacher_id']);
         
-        // Verify teacher belongs to the same school as the classroom
+        if (!$teacher) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No teacher found with the specified ID.'
+            ], 404);
+        }
+
         if ($teacher->school_id !== $classroom->school_id) {
             return response()->json([
-                'message' => 'Teacher and classroom must belong to the same school'
+                'status' => 'error',
+                'message' => 'Teacher and classroom must belong to the same school.'
             ], 422);
         }
 
-        // Update the classroom with the teacher ID
         $classroom->class_teacher_id = $teacher->id;
         $classroom->save();
 
         return response()->json([
-            'message' => 'Teacher assigned to classroom successfully',
+            'status' => 'success',
+            'message' => 'Teacher assigned successfully.',
             'data' => [
-                'classroom' => $classroom->load('teacher'),
-                'teacher' => $teacher
+                'classroom' => $classroom->load('teacher.user'),
+                'teacher' => $teacher->load('user')
             ]
         ]);
     }
@@ -172,16 +300,33 @@ class ClassroomController extends Controller
     /**
      * Remove a teacher from a classroom.
      */
-    public function removeTeacher($classroomId)
+    public function removeTeacher(Request $request, $classroomId)
     {
-        $classroom = Classroom::findOrFail($classroomId);
+        $user = $this->getUser($request);
         
-        // Set the teacher reference to null
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
+        }
+
+        try {
+            $classroom = Classroom::findOrFail($classroomId);
+        } catch (ModelNotFoundException $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No classroom found with the specified ID.'
+            ], 404);
+        }
+
+        if ($classroom->school_id !== $user->school_id) {
+            return response()->json(['message' => 'Unauthorized.'], 403);
+        }
+
         $classroom->class_teacher_id = null;
         $classroom->save();
 
         return response()->json([
-            'message' => 'Teacher removed from classroom successfully',
+            'status' => 'success',
+            'message' => 'Teacher removed successfully.',
             'data' => $classroom
         ]);
     }
@@ -189,14 +334,33 @@ class ClassroomController extends Controller
     /**
      * Get all streams for a specific classroom.
      */
-    public function getStreams($classroomId)
+    public function getStreams(Request $request, $classroomId)
     {
-        $classroom = Classroom::findOrFail($classroomId);
+        $user = $this->getUser($request);
+        
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
+        }
+
+        try {
+            $classroom = Classroom::findOrFail($classroomId);
+        } catch (ModelNotFoundException $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No classroom found with the specified ID.'
+            ], 404);
+        }
+
+        if ($classroom->school_id !== $user->school_id) {
+            return response()->json(['message' => 'Unauthorized.'], 403);
+        }
+
         $streams = Stream::where('class_id', $classroomId)
-            ->with(['school', 'classTeacher', 'teachers'])
+            ->with(['school', 'classTeacher.user', 'teachers'])
             ->get();
 
         return response()->json([
+            'status' => 'success',
             'classroom' => $classroom,
             'streams' => $streams
         ]);
