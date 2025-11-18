@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Stream extends Model
 {
@@ -15,7 +16,8 @@ class Stream extends Model
         'school_id',
         'class_id',
         'name',
-        'class_teacher_id', // Add this!
+        'capacity',
+        'class_teacher_id',
     ];
 
     /**
@@ -48,5 +50,29 @@ class Stream extends Model
     public function teachers(): BelongsToMany
     {
         return $this->belongsToMany(Teacher::class, 'stream_teacher');
+    }
+
+    /**
+     * Get the students in this stream.
+     */
+    public function students(): HasMany
+    {
+        return $this->hasMany(Student::class, 'stream_id');
+    }
+
+    /**
+     * Get the number of students in this stream.
+     */
+    public function getStudentCountAttribute()
+    {
+        return $this->students()->count();
+    }
+
+    /**
+     * Get the remaining capacity in this stream.
+     */
+    public function getRemainingCapacityAttribute()
+    {
+        return max(0, $this->capacity - $this->student_count);
     }
 }

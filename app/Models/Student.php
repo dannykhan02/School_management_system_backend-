@@ -2,8 +2,8 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -20,7 +20,6 @@ class Student extends Model
         'admission_number',
         'date_of_birth',
         'gender',
-        'admission_date',
     ];
 
     // Relationships
@@ -36,22 +35,21 @@ class Student extends Model
 
     public function parent(): BelongsTo
     {
-        
-        return $this->belongsTo(ParentModel::class, 'parent_id');
+        return $this->belongsTo(ParentModel::class);
     }
 
     public function classroom(): BelongsTo
     {
-        return $this->belongsTo(Classroom::class, 'class_id');
-    }
-
-    public function attendances(): HasMany
-    {
-        return $this->hasMany(StudentAttendance::class);
+        return $this->belongsTo(StudentClass::class);
     }
 
     public function studentClasses(): HasMany
     {
         return $this->hasMany(StudentClass::class);
+    }
+
+    public function attendances(): HasMany
+    {
+        return $this->hasMany(StudentAttendance::class);
     }
 }

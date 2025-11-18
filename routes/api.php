@@ -61,18 +61,21 @@ Route::middleware('auth:sanctum')->group(function () {
     // CLASSROOM ROUTES
     // ---------------------
     Route::apiResource('classrooms', ClassroomController::class);
-    Route::post('/classrooms/{classroomId}/assign-teacher', [ClassroomController::class, 'assignTeacher']);
-    Route::delete('/classrooms/{classroomId}/remove-teacher', [ClassroomController::class, 'removeTeacher']);
     Route::get('/classrooms/{classroomId}/streams', [ClassroomController::class, 'getStreams']);
+    Route::post('/classrooms/{classroomId}/streams', [ClassroomController::class, 'addStream']);
 
     // ---------------------
     // STREAM ROUTES
     // ---------------------
+    // IMPORTANT: Specific routes must come BEFORE apiResource
     Route::get('/streams/class-teachers', [StreamController::class, 'getAllClassTeachers']);
     Route::get('/streams/classroom/{classroomId}', [StreamController::class, 'getStreamsByClassroom']);
-    Route::get('/streams/{streamId}/teachers', [StreamController::class, 'getTeachersByStream']);
+    Route::get('/streams/{streamId}/teachers', [StreamController::class, 'getStreamTeachers']);
     Route::post('/streams/{streamId}/assign-class-teacher', [StreamController::class, 'assignClassTeacher']);
+    Route::delete('/streams/{streamId}/remove-class-teacher', [StreamController::class, 'removeClassTeacher']);
     Route::post('/streams/{streamId}/assign-teachers', [StreamController::class, 'assignTeachers']);
+    
+    // apiResource MUST come AFTER specific routes
     Route::apiResource('streams', StreamController::class);
 
     // ---------------------
@@ -89,16 +92,20 @@ Route::middleware('auth:sanctum')->group(function () {
     // ---------------------
     // TEACHER ROUTES
     // ---------------------
-    Route::apiResource('teachers', TeacherController::class);
-    Route::post('/teachers/{teacherId}/assign-subjects', [TeacherController::class, 'assignSubjects']);
-    Route::post('/teachers/{teacherId}/assign-classroom', [TeacherController::class, 'assignToClassroom']);
+    // Specific routes FIRST (before apiResource)
+    Route::get('/teachers/class-teachers', [TeacherController::class, 'getAllClassTeachers']);
+    Route::get('/teachers/school/{schoolId}', [TeacherController::class, 'getTeachersBySchool']);
+    Route::get('/teachers/stream/{streamId}', [TeacherController::class, 'getTeachersByStream']);
     Route::get('/teachers/{teacherId}/classrooms', [TeacherController::class, 'getClassrooms']);
-    Route::post('/teachers/{teacherId}/assign-stream', [TeacherController::class, 'assignToStream']);
     Route::get('/teachers/{teacherId}/streams-as-class-teacher', [TeacherController::class, 'getStreamsAsClassTeacher']);
     Route::get('/teachers/{teacherId}/streams-as-teacher', [TeacherController::class, 'getStreamsAsTeacher']);
-    Route::get('/teachers/school/{schoolId}', [TeacherController::class, 'getTeachersBySchool']);
-    Route::get('/teachers/class-teachers', [TeacherController::class, 'getAllClassTeachers']);
-    Route::get('/teachers/stream/{streamId}', [TeacherController::class, 'getTeachersByStream']);
+
+    // POST routes
+    Route::post('/teachers/{teacherId}/assign-subjects', [TeacherController::class, 'assignSubjects']);
+    Route::post('/teachers/{teacherId}/assign-stream', [TeacherController::class, 'assignToStream']);
+
+    // apiResource LAST
+    Route::apiResource('teachers', TeacherController::class);
 
     // ---------------------
     // STUDENT ROUTES

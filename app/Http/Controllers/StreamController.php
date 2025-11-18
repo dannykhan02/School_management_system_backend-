@@ -30,6 +30,48 @@ class StreamController extends Controller
     }
 
     /**
+     * Helper to check if a teacher is already a class teacher for another stream.
+     * Returns the existing stream if teacher is already assigned, null otherwise.
+     */
+    private function checkTeacherClassTeacherAssignment(Request $request, $teacherId, $currentStreamId = null)
+    {
+        $user = $this->getUser($request);
+        if (!$user) {
+            return null;
+        }
+
+        $query = Stream::where('class_teacher_id', $teacherId)
+                       ->where('school_id', $user->school_id);
+
+        // If we are updating an existing stream, exclude it from the check.
+        // This allows re-assigning the same teacher or changing to a new one correctly.
+        if ($currentStreamId) {
+            $query->where('id', '!=', $currentStreamId);
+        }
+
+        return $query->first();
+    }
+
+    /**
+     * Validate that a teacher can be assigned as class teacher
+     */
+    private function validateClassTeacherAssignment(Request $request, $teacherId, $currentStreamId = null)
+    {
+        $existingStream = $this->checkTeacherClassTeacherAssignment($request, $teacherId, $currentStreamId);
+        
+        if ($existingStream) {
+            return [
+                'valid' => false,
+                'message' => 'This teacher is already assigned as a class teacher to another stream.',
+                'error' => 'A teacher can only be a class teacher for one stream.',
+                'existing_stream' => $existingStream->name
+            ];
+        }
+
+        return ['valid' => true];
+    }
+
+    /**
      * GET all streams for user's school
      */
     public function index(Request $request)
@@ -44,7 +86,7 @@ class StreamController extends Controller
             return response()->json(['message' => 'User is not associated with any school.'], 400);
         }
 
-        $streams = Stream::with(['school', 'classroom', 'classTeacher', 'teachers'])
+        $streams = Stream::with(['school', 'classroom', 'classTeacher.user', 'teachers.user'])
             ->where('school_id', $user->school_id)
             ->get();
 
@@ -66,7 +108,7 @@ class StreamController extends Controller
         }
 
         try {
-            $stream = Stream::with(['school', 'classroom', 'classTeacher', 'teachers'])->findOrFail($id);
+            $stream = Stream::with(['school', 'classroom', 'classTeacher.user', 'teachers.user'])->findOrFail($id);
         } catch (ModelNotFoundException $e) {
             return response()->json([
                 'status' => 'error',
@@ -99,101 +141,76 @@ class StreamController extends Controller
             return response()->json(['message' => 'User is not associated with any school.'], 400);
         }
 
-        // Log the incoming request for debugging
         Log::info('Stream Creation Request', [
             'user_id' => $user->id,
             'school_id' => $user->school_id,
             'request_data' => $request->all()
         ]);
 
-        // FIXED: Simplified validation rules to match the update method
-        $rules = [
+        $validated = $request->validate([
             'name' => 'required|string|max:255',
             'class_id' => 'required|integer',
+            'capacity' => 'required|integer|min:1',
             'class_teacher_id' => 'nullable|integer',
-        ];
-
-        try {
-            $validated = $request->validate($rules);
-        } catch (ValidationException $e) {
-            Log::error('Validation failed for stream creation', [
-                'errors' => $e->errors(),
-                'request_data' => $request->all()
-            ]);
-            
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Validation failed. Please check your input.',
-                'errors' => $e->errors()
-            ], 422);
-        }
+        ]);
 
         // Verify classroom exists and belongs to same school
         $classroom = Classroom::find($validated['class_id']);
         
-        if (!$classroom) {
+        if (!$classroom || $classroom->school_id !== $user->school_id) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'The specified classroom does not exist.',
-                'errors' => [
-                    'class_id' => ['The selected classroom is invalid.']
-                ]
-            ], 422);
-        }
-        
-        if ($classroom->school_id !== $user->school_id) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'The selected classroom does not belong to your school.',
-                'errors' => [
-                    'class_id' => ['The classroom must belong to your school.']
-                ]
+                'message' => 'The classroom must belong to the same school.',
+                'errors' => ['class_id' => ['The selected classroom is invalid or does not belong to your school.']]
             ], 422);
         }
 
-        // Verify class teacher belongs to same school if provided
-        if (isset($validated['class_teacher_id']) && !empty($validated['class_teacher_id'])) {
+        // If class_teacher_id is provided, verify the teacher exists and belongs to same school
+        if (!empty($validated['class_teacher_id'])) {
             $teacher = Teacher::find($validated['class_teacher_id']);
             
-            if (!$teacher) {
+            if (!$teacher || $teacher->school_id !== $user->school_id) {
                 return response()->json([
                     'status' => 'error',
-                    'message' => 'The specified teacher does not exist.',
-                    'errors' => [
-                        'class_teacher_id' => ['The selected teacher is invalid.']
-                    ]
+                    'message' => 'The teacher must belong to the same school.',
+                    'errors' => ['class_teacher_id' => ['The selected teacher is invalid or does not belong to your school.']]
                 ], 422);
             }
-            
-            if ($teacher->school_id !== $user->school_id) {
+
+            // Check if teacher is already a class teacher for another stream
+            $validation = $this->validateClassTeacherAssignment($request, $validated['class_teacher_id']);
+            if (!$validation['valid']) {
                 return response()->json([
                     'status' => 'error',
-                    'message' => 'The class teacher must belong to the same school.',
-                    'errors' => [
-                        'class_teacher_id' => ['The teacher must belong to your school.']
-                    ]
+                    'message' => $validation['message'],
+                    'errors' => ['class_teacher_id' => [$validation['error']]],
+                    'existing_stream' => $validation['existing_stream']
                 ], 422);
             }
         }
 
-        // Add school_id to validated data
-        $validated['school_id'] = $user->school_id;
-
-        // Remove class_teacher_id if it's empty/null
-        if (empty($validated['class_teacher_id'])) {
-            $validated['class_teacher_id'] = null;
-        }
-
-        Log::info('Creating stream with validated data', [
-            'validated' => $validated
+        $stream = Stream::create([
+            'name' => $validated['name'],
+            'capacity' => $validated['capacity'],
+            'class_teacher_id' => $validated['class_teacher_id'] ?? null,
+            'class_id' => $validated['class_id'],
+            'school_id' => $user->school_id,
         ]);
 
-        $stream = Stream::create($validated);
+        // If a class teacher is assigned, automatically add them to teaching staff
+        if (!empty($validated['class_teacher_id'])) {
+            $stream->teachers()->attach($validated['class_teacher_id']);
+        }
+
+        Log::info('Stream created successfully', [
+            'stream_id' => $stream->id,
+            'stream_data' => $validated
+        ]);
 
         return response()->json([
             'status' => 'success',
             'message' => 'Stream created successfully.',
-            'data' => $stream->load(['school', 'classroom', 'classTeacher'])
+            'data' => $stream->load(['school', 'classroom', 'classTeacher.user', 'teachers.user'])
         ], 201);
     }
 
@@ -221,105 +238,83 @@ class StreamController extends Controller
             return response()->json(['message' => 'Unauthorized. This stream does not belong to your school.'], 403);
         }
 
-        // Log incoming request for debugging
         Log::info('Stream Update Request', [
             'stream_id' => $id,
-            'request_data' => $request->all(),
-            'current_stream' => $stream->toArray()
+            'request_data' => $request->all()
         ]);
 
-        // Improved validation logic
-        $rules = [
+        $validated = $request->validate([
             'name' => 'sometimes|required|string|max:255',
+            'class_id' => 'sometimes|required|integer',
+            'capacity' => 'sometimes|required|integer|min:1',
             'class_teacher_id' => 'nullable|integer',
-        ];
+        ]);
 
-        // Only validate class_id if it's being changed
-        if ($request->has('class_id')) {
-            if ($request->class_id === null || $request->class_id === '') {
-                // Allow null/empty to keep existing value
-                $rules['class_id'] = 'nullable';
-            } else {
-                // Validate if a new value is provided
-                $rules['class_id'] = 'required|integer';
-            }
-        }
-
-        try {
-            $validated = $request->validate($rules);
-        } catch (ValidationException $e) {
-            Log::error('Validation failed for stream update', [
-                'stream_id' => $id,
-                'errors' => $e->errors(),
-                'request_data' => $request->all()
-            ]);
-            
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Validation failed.',
-                'errors' => $e->errors()
-            ], 422);
-        }
-
-        // Verify new classroom belongs to same school (only if class_id is being changed and not null)
-        if (isset($validated['class_id']) && !empty($validated['class_id'])) {
+        if (isset($validated['class_id'])) {
             $classroom = Classroom::find($validated['class_id']);
-            
-            if (!$classroom) {
+            if (!$classroom || $classroom->school_id !== $user->school_id) {
                 return response()->json([
                     'status' => 'error',
-                    'message' => 'The specified classroom does not exist.',
-                    'errors' => [
-                        'class_id' => ['The selected classroom is invalid.']
-                    ]
+                    'message' => 'The classroom must belong to the same school.',
+                    'errors' => ['class_id' => ['The selected classroom is invalid or does not belong to your school.']]
                 ], 422);
             }
-            
-            if ($classroom->school_id !== $stream->school_id) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'The assigned classroom must belong to the same school.',
-                    'errors' => [
-                        'class_id' => ['The classroom must belong to your school.']
-                    ]
-                ], 422);
-            }
-        } else {
-            // If class_id is null or not provided, keep the existing value
-            unset($validated['class_id']);
         }
 
-        // Verify class teacher belongs to same school if provided
         if (isset($validated['class_teacher_id']) && !empty($validated['class_teacher_id'])) {
             $teacher = Teacher::find($validated['class_teacher_id']);
             
-            if (!$teacher) {
+            if (!$teacher || $teacher->school_id !== $user->school_id) {
                 return response()->json([
                     'status' => 'error',
-                    'message' => 'The specified teacher does not exist.',
-                    'errors' => [
-                        'class_teacher_id' => ['The selected teacher is invalid.']
-                    ]
+                    'message' => 'The teacher must belong to the same school.',
+                    'errors' => ['class_teacher_id' => ['The selected teacher is invalid or does not belong to your school.']]
                 ], 422);
             }
-            
-            if ($teacher->school_id !== $stream->school_id) {
+
+            // Check if teacher is already a class teacher for another stream
+            $validation = $this->validateClassTeacherAssignment($request, $validated['class_teacher_id'], $id);
+            if (!$validation['valid']) {
                 return response()->json([
                     'status' => 'error',
-                    'message' => 'The class teacher must belong to the same school.',
-                    'errors' => [
-                        'class_teacher_id' => ['The teacher must belong to your school.']
-                    ]
+                    'message' => $validation['message'],
+                    'errors' => ['class_teacher_id' => [$validation['error']]],
+                    'existing_stream' => $validation['existing_stream']
                 ], 422);
             }
         }
 
+        // Check if class_teacher_id is being changed
+        $classTeacherChanged = isset($validated['class_teacher_id']) && 
+                               $validated['class_teacher_id'] != $stream->class_teacher_id;
+        
+        $oldClassTeacherId = $stream->class_teacher_id;
+        
         $stream->update($validated);
+
+        // If class teacher was changed, update teaching staff accordingly
+        if ($classTeacherChanged) {
+            // Remove old class teacher from teaching staff if they were there
+            if ($oldClassTeacherId) {
+                $stream->teachers()->detach($oldClassTeacherId);
+            }
+            
+            // Add new class teacher to teaching staff if assigned
+            if (!empty($validated['class_teacher_id'])) {
+                // Use syncWithoutDetaching to avoid removing other teachers
+                $stream->teachers()->syncWithoutDetaching([$validated['class_teacher_id']]);
+            }
+        }
+
+        Log::info('Stream updated successfully', [
+            'stream_id' => $stream->id,
+            'class_teacher_changed' => $classTeacherChanged
+        ]);
 
         return response()->json([
             'status' => 'success',
             'message' => 'Stream updated successfully.',
-            'data' => $stream->load(['school', 'classroom', 'classTeacher'])
+            'data' => $stream->load(['school', 'classroom', 'classTeacher.user', 'teachers.user'])
         ]);
     }
 
@@ -349,6 +344,10 @@ class StreamController extends Controller
 
         $stream->delete();
 
+        Log::info('Stream deleted successfully', [
+            'stream_id' => $id
+        ]);
+
         return response()->json([
             'status' => 'success',
             'message' => 'Stream deleted successfully.'
@@ -356,7 +355,7 @@ class StreamController extends Controller
     }
 
     /**
-     * GET - Streams by Classroom
+     * GET streams by classroom
      */
     public function getStreamsByClassroom(Request $request, $classroomId)
     {
@@ -376,17 +375,49 @@ class StreamController extends Controller
         }
 
         if ($classroom->school_id !== $user->school_id) {
-            return response()->json(['message' => 'Unauthorized access to this classroom.'], 403);
+            return response()->json(['message' => 'Unauthorized.'], 403);
         }
 
         $streams = Stream::where('class_id', $classroomId)
-            ->with(['school', 'classTeacher', 'teachers'])
+            ->with(['school', 'classTeacher.user', 'teachers.user'])
             ->get();
 
         return response()->json([
             'status' => 'success',
-            'message' => 'Streams for classroom fetched successfully.',
-            'data' => $streams
+            'classroom' => $classroom,
+            'streams' => $streams
+        ]);
+    }
+
+    /**
+     * GET teachers assigned to a specific stream
+     */
+    public function getStreamTeachers(Request $request, $streamId)
+    {
+        $user = $this->getUser($request);
+        
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
+        }
+
+        try {
+            $stream = Stream::with(['teachers.user', 'classroom', 'classTeacher.user'])
+                ->findOrFail($streamId);
+        } catch (ModelNotFoundException $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No stream found with the specified ID.'
+            ], 404);
+        }
+
+        if ($stream->school_id !== $user->school_id) {
+            return response()->json(['message' => 'Unauthorized.'], 403);
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'stream' => $stream,
+            'teachers' => $stream->teachers
         ]);
     }
 
@@ -420,34 +451,47 @@ class StreamController extends Controller
 
         $teacher = Teacher::find($validated['teacher_id']);
         
-        if (!$teacher) {
+        if (!$teacher || $teacher->school_id !== $stream->school_id) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'No teacher found with the specified ID.'
-            ], 404);
+                'message' => 'The teacher must belong to the same school.',
+                'errors' => ['teacher_id' => ['The selected teacher is invalid or does not belong to the same school.']]
+            ], 422);
         }
         
-        if ($teacher->school_id !== $stream->school_id) {
+        // Check if teacher is already a class teacher for another stream
+        $validation = $this->validateClassTeacherAssignment($request, $validated['teacher_id'], $streamId);
+        if (!$validation['valid']) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Teacher and stream must belong to the same school.'
+                'message' => $validation['message'],
+                'errors' => ['teacher_id' => [$validation['error']]],
+                'existing_stream' => $validation['existing_stream']
             ], 422);
         }
 
-        $stream->class_teacher_id = $teacher->id;
+        $stream->class_teacher_id = $validated['teacher_id'];
         $stream->save();
+
+        // Automatically add the class teacher to teaching staff
+        $stream->teachers()->syncWithoutDetaching([$validated['teacher_id']]);
+
+        Log::info('Class teacher assigned successfully', [
+            'stream_id' => $streamId,
+            'teacher_id' => $validated['teacher_id']
+        ]);
 
         return response()->json([
             'status' => 'success',
             'message' => 'Class teacher assigned successfully.',
-            'data' => $stream->load(['classTeacher'])
+            'data' => $stream->load(['school', 'classroom', 'classTeacher.user', 'teachers.user'])
         ]);
     }
 
     /**
-     * Assign multiple teachers to a stream
+     * Remove class teacher from a stream
      */
-    public function assignTeachers(Request $request, $streamId)
+    public function removeClassTeacher(Request $request, $streamId)
     {
         $user = $this->getUser($request);
         
@@ -465,70 +509,36 @@ class StreamController extends Controller
         }
 
         if ($stream->school_id !== $user->school_id) {
-            return response()->json(['message' => 'Unauthorized. You cannot modify a stream from another school.'], 403);
+            return response()->json(['message' => 'Unauthorized.'], 403);
         }
 
-        $validated = $request->validate([
-            'teacher_ids' => 'required|array',
-            'teacher_ids.*' => 'integer',
-        ]);
-
-        // Verify all teachers belong to the same school
-        $teachers = Teacher::whereIn('id', $validated['teacher_ids'])
-            ->where('school_id', $stream->school_id)
-            ->get();
-
-        if ($teachers->count() !== count($validated['teacher_ids'])) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'One or more teachers do not belong to the same school or do not exist.'
-            ], 422);
-        }
-
-        // Sync teachers to stream (assuming many-to-many relationship)
-        $stream->teachers()->sync($validated['teacher_ids']);
-
-        return response()->json([
-            'status' => 'success',
-            'message' => 'Teachers assigned successfully.',
-            'data' => $stream->load(['teachers'])
-        ]);
-    }
-
-    /**
-     * GET teachers assigned to a stream
-     */
-    public function getStreamTeachers(Request $request, $streamId)
-    {
-        $user = $this->getUser($request);
+        $oldClassTeacherId = $stream->class_teacher_id;
         
-        if (!$user) {
-            return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
-        }
+        $stream->class_teacher_id = null;
+        $stream->save();
 
-        try {
-            $stream = Stream::with('teachers.user')->findOrFail($streamId);
-        } catch (ModelNotFoundException $e) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'No stream found with the specified ID.'
-            ], 404);
-        }
+        // Optionally remove the old class teacher from teaching staff
+        // Uncomment the line below if you want to remove them automatically
+        // if ($oldClassTeacherId) {
+        //     $stream->teachers()->detach($oldClassTeacherId);
+        // }
 
-        if ($stream->school_id !== $user->school_id) {
-            return response()->json(['message' => 'Unauthorized access to this stream.'], 403);
-        }
+        Log::info('Class teacher removed successfully', [
+            'stream_id' => $streamId,
+            'removed_teacher_id' => $oldClassTeacherId
+        ]);
 
         return response()->json([
             'status' => 'success',
-            'teachers' => $stream->teachers
+            'message' => 'Class teacher removed successfully.',
+            'data' => $stream->load(['school', 'classroom', 'classTeacher', 'teachers.user'])
         ]);
     }
 
     /**
-     * GET all streams with their class teachers
+     * GET all class teachers with their streams
      */
-    public function getClassTeachers(Request $request)
+    public function getAllClassTeachers(Request $request)
     {
         $user = $this->getUser($request);
         
@@ -540,7 +550,7 @@ class StreamController extends Controller
             return response()->json(['message' => 'User is not associated with any school.'], 400);
         }
 
-        $streams = Stream::with(['classroom', 'classTeacher.user'])
+        $streams = Stream::with(['classroom', 'classTeacher.user', 'school'])
             ->where('school_id', $user->school_id)
             ->whereNotNull('class_teacher_id')
             ->get();
@@ -548,6 +558,69 @@ class StreamController extends Controller
         return response()->json([
             'status' => 'success',
             'data' => $streams
+        ]);
+    }
+
+    /**
+     * Assign teaching staff to a stream
+     */
+    public function assignTeachers(Request $request, $streamId)
+    {
+        $user = $this->getUser($request);
+        
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized.'], 401);
+        }
+
+        try {
+            $stream = Stream::findOrFail($streamId);
+        } catch (ModelNotFoundException $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No stream found with the specified ID.'
+            ], 404);
+        }
+        
+        if ($stream->school_id !== $user->school_id) {
+            return response()->json(['message' => 'Unauthorized.'], 403);
+        }
+
+        $validated = $request->validate([
+            'teacher_ids' => 'required|array',
+            'teacher_ids.*' => 'integer|exists:teachers,id',
+        ]);
+
+        // Verify all teachers belong to the same school
+        $teachers = Teacher::whereIn('id', $validated['teacher_ids'])->get();
+        foreach ($teachers as $teacher) {
+            if ($teacher->school_id !== $user->school_id) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'All teachers must belong to the same school.',
+                    'errors' => ['teacher_ids' => ['Teacher with ID ' . $teacher->id . ' does not belong to your school.']]
+                ], 422);
+            }
+        }
+
+        // Ensure class teacher is always included in teaching staff
+        $teacherIds = $validated['teacher_ids'];
+        if ($stream->class_teacher_id && !in_array($stream->class_teacher_id, $teacherIds)) {
+            $teacherIds[] = $stream->class_teacher_id;
+        }
+
+        // Sync teachers (attach new, detach removed, but keep class teacher)
+        $stream->teachers()->sync($teacherIds);
+
+        Log::info('Teaching staff assigned successfully', [
+            'stream_id' => $streamId,
+            'teacher_ids' => $teacherIds,
+            'class_teacher_auto_included' => $stream->class_teacher_id
+        ]);
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Teaching staff updated successfully.',
+            'data' => $stream->load(['teachers.user', 'classTeacher.user'])
         ]);
     }
 }

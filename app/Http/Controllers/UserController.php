@@ -9,8 +9,28 @@ use Illuminate\Support\Facades\Auth;
 
 class UserController extends Controller
 {
-
- 
+    // Get all users for the current school with optional role filtering
+    public function index(Request $request)
+    {
+        $authUser = Auth::user();
+        
+        $query = User::where('school_id', $authUser->school_id);
+        
+        // Filter by role if provided
+        if ($request->has('role_id')) {
+            $query->where('role_id', $request->role_id);
+        }
+        
+        // Filter out users who are already teachers if requested
+        if ($request->has('exclude_teachers') && $request->exclude_teachers) {
+            $teacherUserIds = \App\Models\Teacher::pluck('user_id');
+            $query->whereNotIn('id', $teacherUserIds);
+        }
+        
+        $users = $query->with('role')->get();
+        
+        return response()->json($users);
+    }
 
     // Create a user for the current school only
     public function store(Request $request)
