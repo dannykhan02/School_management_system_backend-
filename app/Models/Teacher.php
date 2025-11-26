@@ -4,12 +4,13 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class Teacher extends Model
 {
     use HasFactory;
     
-    public $timestamps = true; // Add this line if not present
+    public $timestamps = true;
     
     protected $fillable = [
         'user_id',
@@ -17,36 +18,75 @@ class Teacher extends Model
         'qualification',
         'employment_type',
         'tsc_number',
+        'specialization',          // e.g., 'Sciences', 'Languages', 'Mathematics'
+        'curriculum_specialization', // 'CBC', '8-4-4', or 'Both'
+        'max_subjects',            // Maximum number of subjects this teacher can handle
+        'max_classes',             // Maximum number of classes this teacher can handle
     ];
 
+    /**
+     * Get the user associated with the teacher.
+     */
     public function user()
     {
         return $this->belongsTo(User::class);
     }
 
+    /**
+     * Get the school the teacher belongs to.
+     */
     public function school()
     {
         return $this->belongsTo(School::class);
     }
 
-    // The classrooms relationship has been removed since class_teacher_id column no longer exists
-    // If you need to track which classrooms a teacher is associated with, you would need to
-    // create a pivot table or add a different relationship structure
-    
-    public function subjects()
+    /**
+     * The subjects that the teacher teaches.
+     */
+    public function subjects(): BelongsToMany
     {
         return $this->belongsToMany(Subject::class);
     }
-    
-    // If you need to get the streams where this teacher is the class teacher:
+
+    /**
+     * Get the streams where this teacher is the class teacher.
+     */
     public function classTeacherStreams()
     {
         return $this->hasMany(Stream::class, 'class_teacher_id');
     }
-    
-    // If you need to get the streams where this teacher is part of the teaching staff:
+
+    /**
+     * Get the streams where this teacher teaches.
+     */
     public function teachingStreams()
     {
         return $this->belongsToMany(Stream::class);
+    }
+
+    /**
+     * Scope a query to only include teachers who specialize in CBC.
+     */
+    public function scopeCbcSpecialists($query)
+    {
+        return $query->where('curriculum_specialization', 'CBC')
+                    ->orWhere('curriculum_specialization', 'Both');
+    }
+
+    /**
+     * Scope a query to only include teachers who specialize in 8-4-4.
+     */
+    public function scopeLegacySpecialists($query)
+    {
+        return $query->where('curriculum_specialization', '8-4-4')
+                    ->orWhere('curriculum_specialization', 'Both');
+    }
+
+    /**
+     * Scope a query to only include teachers with a specific specialization.
+     */
+    public function scopeBySpecialization($query, $specialization)
+    {
+        return $query->where('specialization', $specialization);
     }
 }

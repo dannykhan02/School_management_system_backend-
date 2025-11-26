@@ -6,6 +6,7 @@ use App\Models\Stream;
 use App\Models\Classroom;
 use App\Models\Teacher;
 use App\Models\User;
+use App\Models\School;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -27,6 +28,24 @@ class StreamController extends Controller
         }
 
         return $user;
+    }
+
+    /**
+     * Check if the school has streams enabled
+     */
+    private function checkSchoolStreamsEnabled(Request $request)
+    {
+        $user = $this->getUser($request);
+        if (!$user) {
+            return false;
+        }
+
+        $school = School::find($user->school_id);
+        if (!$school) {
+            return false;
+        }
+
+        return $school->has_streams;
     }
 
     /**
@@ -86,6 +105,13 @@ class StreamController extends Controller
             return response()->json(['message' => 'User is not associated with any school.'], 400);
         }
 
+        // Check if school has streams enabled
+        if (!$this->checkSchoolStreamsEnabled($request)) {
+            return response()->json([
+                'message' => 'Your school does not have streams enabled.'
+            ], 403);
+        }
+
         $streams = Stream::with(['school', 'classroom', 'classTeacher.user', 'teachers.user'])
             ->where('school_id', $user->school_id)
             ->get();
@@ -105,6 +131,13 @@ class StreamController extends Controller
         
         if (!$user) {
             return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
+        }
+
+        // Check if school has streams enabled
+        if (!$this->checkSchoolStreamsEnabled($request)) {
+            return response()->json([
+                'message' => 'Your school does not have streams enabled.'
+            ], 403);
         }
 
         try {
@@ -139,6 +172,13 @@ class StreamController extends Controller
 
         if (!$user->school_id) {
             return response()->json(['message' => 'User is not associated with any school.'], 400);
+        }
+
+        // Check if school has streams enabled
+        if (!$this->checkSchoolStreamsEnabled($request)) {
+            return response()->json([
+                'message' => 'Your school does not have streams enabled.'
+            ], 403);
         }
 
         Log::info('Stream Creation Request', [
@@ -223,6 +263,13 @@ class StreamController extends Controller
         
         if (!$user) {
             return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
+        }
+
+        // Check if school has streams enabled
+        if (!$this->checkSchoolStreamsEnabled($request)) {
+            return response()->json([
+                'message' => 'Your school does not have streams enabled.'
+            ], 403);
         }
 
         try {
@@ -329,6 +376,13 @@ class StreamController extends Controller
             return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
         }
 
+        // Check if school has streams enabled
+        if (!$this->checkSchoolStreamsEnabled($request)) {
+            return response()->json([
+                'message' => 'Your school does not have streams enabled.'
+            ], 403);
+        }
+
         try {
             $stream = Stream::findOrFail($id);
         } catch (ModelNotFoundException $e) {
@@ -363,6 +417,13 @@ class StreamController extends Controller
         
         if (!$user) {
             return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
+        }
+
+        // Check if school has streams enabled
+        if (!$this->checkSchoolStreamsEnabled($request)) {
+            return response()->json([
+                'message' => 'Your school does not have streams enabled.'
+            ], 403);
         }
 
         try {
@@ -400,6 +461,13 @@ class StreamController extends Controller
             return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
         }
 
+        // Check if school has streams enabled
+        if (!$this->checkSchoolStreamsEnabled($request)) {
+            return response()->json([
+                'message' => 'Your school does not have streams enabled.'
+            ], 403);
+        }
+
         try {
             $stream = Stream::with(['teachers.user', 'classroom', 'classTeacher.user'])
                 ->findOrFail($streamId);
@@ -430,6 +498,13 @@ class StreamController extends Controller
         
         if (!$user) {
             return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
+        }
+
+        // Check if school has streams enabled
+        if (!$this->checkSchoolStreamsEnabled($request)) {
+            return response()->json([
+                'message' => 'Your school does not have streams enabled.'
+            ], 403);
         }
 
         try {
@@ -499,6 +574,13 @@ class StreamController extends Controller
             return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
         }
 
+        // Check if school has streams enabled
+        if (!$this->checkSchoolStreamsEnabled($request)) {
+            return response()->json([
+                'message' => 'Your school does not have streams enabled.'
+            ], 403);
+        }
+
         try {
             $stream = Stream::findOrFail($streamId);
         } catch (ModelNotFoundException $e) {
@@ -550,6 +632,13 @@ class StreamController extends Controller
             return response()->json(['message' => 'User is not associated with any school.'], 400);
         }
 
+        // Check if school has streams enabled
+        if (!$this->checkSchoolStreamsEnabled($request)) {
+            return response()->json([
+                'message' => 'Your school does not have streams enabled.'
+            ], 403);
+        }
+
         $streams = Stream::with(['classroom', 'classTeacher.user', 'school'])
             ->where('school_id', $user->school_id)
             ->whereNotNull('class_teacher_id')
@@ -570,6 +659,13 @@ class StreamController extends Controller
         
         if (!$user) {
             return response()->json(['message' => 'Unauthorized.'], 401);
+        }
+
+        // Check if school has streams enabled
+        if (!$this->checkSchoolStreamsEnabled($request)) {
+            return response()->json([
+                'message' => 'Your school does not have streams enabled.'
+            ], 403);
         }
 
         try {

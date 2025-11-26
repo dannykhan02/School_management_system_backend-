@@ -13,26 +13,30 @@ use Illuminate\Support\Facades\Storage;
 
 class SchoolController extends Controller
 {
-    // ✅ Get all schools
+    /**
+     * Display a listing of the schools.
+     */
     public function index()
-     {
-                    // Fetch all schools with their users
-                    $schools = School::with('users')->get();
+    {
+        // Fetch all schools with their users
+        $schools = School::with('users')->get();
 
-                    // Map each school to include full logo URL
-                    $schools = $schools->map(function($school) {
-                        $schoolData = $school->toArray();
-                        $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
-                        return $schoolData;
-                    });
+        // Map each school to include full logo URL
+        $schools = $schools->map(function($school) {
+            $schoolData = $school->toArray();
+            $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
+            return $schoolData;
+        });
 
-                    return response()->json([
-                        'message' => 'All registered schools fetched successfully',
-                        'data' => $schools
-                    ], 200);
+        return response()->json([
+            'message' => 'All registered schools fetched successfully',
+            'data' => $schools
+        ], 200);
     }
 
-
+    /**
+     * Store a newly created school and its admin user in storage.
+     */
     public function store(Request $request)
     {
         $data = $request->validate([
@@ -44,6 +48,8 @@ class SchoolController extends Controller
             'school.phone' => 'required|string|max:20',
             'school.email' => 'required|email|max:255',
             'school.logo' => 'nullable|file|mimes:jpg,jpeg,png|max:5120',
+            'school.primary_curriculum' => 'required|in:CBC,8-4-4,Both',
+            'school.has_streams' => 'sometimes|boolean',
             
             'admin.full_name' => 'required|string|max:255',
             'admin.email' => 'required|email|max:255|unique:users,email',
@@ -75,6 +81,8 @@ class SchoolController extends Controller
                 'phone' => $data['school']['phone'] ?? null,
                 'email' => $data['school']['email'] ?? null,
                 'logo' => $logoPath,
+                'primary_curriculum' => $data['school']['primary_curriculum'],
+                'has_streams' => $data['school']['has_streams'] ?? false,
             ]);
 
             // 3️⃣ Get or create admin role
@@ -108,77 +116,85 @@ class SchoolController extends Controller
         }
     }
 
+    /**
+     * Display the specified school.
+     */
+    public function show(School $school)
+    {
+        $schoolData = $school->toArray();
+        $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
 
- public function show(School $school)
-{
-    $schoolData = $school->toArray();
-    $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
+        return response()->json([
+            'message' => 'School fetched successfully',
+            'data' => $schoolData
+        ], 200);
+    }
 
-    return response()->json([
-        'message' => 'School fetched successfully',
-        'data' => $schoolData
-    ], 200);
-}
-
-
+    /**
+     * Get the school for the currently authenticated user.
+     */
     public function mySchool()
-        {
-            $user = Auth::user();
+    {
+        $user = Auth::user();
 
-            if (!$user || !$user->school) {
-                return response()->json([
-                    'error' => 'No school found for this user'
-                ], 404);
-            }
-
-            $school = $user->school;
-
-            $schoolData = $school->toArray();
-            $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
-
+        if (!$user || !$user->school) {
             return response()->json([
-                'message' => 'School fetched successfully',
-                'data' => $schoolData
-            ], 200);
+                'error' => 'No school found for this user'
+            ], 404);
         }
 
-            public function update(Request $request, School $school)
-            {
-                $data = $request->validate([
-                    'name' => 'sometimes|required|string|max:255|unique:schools,name,' . $school->id,
-                    'address' => 'nullable|string|max:500',
-                    'school_type' => 'nullable|in:Primary,Secondary',
-                    'city' => 'nullable|string|max:100',
-                    'code' => 'nullable|string|max:50|unique:schools,code,' . $school->id,
-                    'phone' => 'nullable|string|max:20',
-                    'email' => 'nullable|email|max:255',
-                    'logo' => 'nullable|file|mimes:jpg,jpeg,png|max:5120'
-                ], [
-                    'name.unique' => 'A school with this name already exists.',
-                    'code.unique' => 'This school code is already in use.',
-                ]);
+        $school = $user->school;
 
-                // Handle logo update
-                if ($request->hasFile('logo')) {
-                    // Delete old logo if exists
-                    if ($school->logo && Storage::disk('public')->exists($school->logo)) {
-                        Storage::disk('public')->delete($school->logo);
-                    }
+        $schoolData = $school->toArray();
+        $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
 
-                    // Store new logo
-                    $data['logo'] = $request->file('logo')->store('logos', 'public');
-                }
+        return response()->json([
+            'message' => 'School fetched successfully',
+            'data' => $schoolData
+        ], 200);
+    }
 
-                $school->update($data);
+    /**
+     * Update the specified school in storage.
+     */
+    public function update(Request $request, School $school)
+    {
+        $data = $request->validate([
+            'name' => 'sometimes|required|string|max:255|unique:schools,name,' . $school->id,
+            'address' => 'nullable|string|max:500',
+            'school_type' => 'nullable|in:Primary,Secondary',
+            'city' => 'nullable|string|max:100',
+            'code' => 'nullable|string|max:50|unique:schools,code,' . $school->id,
+            'phone' => 'nullable|string|max:20',
+            'email' => 'nullable|email|max:255',
+            'logo' => 'nullable|file|mimes:jpg,jpeg,png|max:5120',
+            'primary_curriculum' => 'sometimes|required|in:CBC,8-4-4,Both',
+            'has_streams' => 'sometimes|boolean'
+        ], [
+            'name.unique' => 'A school with this name already exists.',
+            'code.unique' => 'This school code is already in use.',
+        ]);
 
-                // Return updated school with full logo URL
-                $schoolData = $school->toArray();
-                $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
-
-                return response()->json([
-                    'message' => 'School updated successfully',
-                    'data' => $schoolData
-                ], 200);
+        // Handle logo update
+        if ($request->hasFile('logo')) {
+            // Delete old logo if it exists
+            if ($school->logo && Storage::disk('public')->exists($school->logo)) {
+                Storage::disk('public')->delete($school->logo);
             }
 
+            // Store new logo
+            $data['logo'] = $request->file('logo')->store('logos', 'public');
+        }
+
+        $school->update($data);
+
+        // Return updated school with full logo URL
+        $schoolData = $school->toArray();
+        $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
+
+        return response()->json([
+            'message' => 'School updated successfully',
+            'data' => $schoolData
+        ], 200);
+    }
 }

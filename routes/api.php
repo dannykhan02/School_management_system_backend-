@@ -3,11 +3,13 @@
 use App\Http\Controllers\AcademicYearController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ClassroomController;
+use App\Http\Controllers\ParentController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\SchoolController;
 use App\Http\Controllers\StreamController;
 use App\Http\Controllers\StudentController;
 use App\Http\Controllers\SubjectController;
+use App\Http\Controllers\SubjectAssignmentController;
 use App\Http\Controllers\TeacherController;
 use App\Http\Controllers\UserController;
 use Illuminate\Http\Request;
@@ -79,20 +81,20 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('streams', StreamController::class);
 
     // ---------------------
-    // SUBJECT ROUTES
+    // SUBJECT ASSIGNMENT ROUTES
+    // ----------------a-----
+    Route::apiResource('subject-assignments', SubjectAssignmentController::class);
+
+    // ---------------------
+    // SUBJECT ROUTESaa
     // ---------------------
     Route::apiResource('subjects', SubjectController::class);
-    Route::post('/subjects/{subjectId}/assign-teacher', [SubjectController::class, 'assignToTeacher']);
-    Route::delete('/subjects/{subjectId}/remove-teacher/{teacherId}', [SubjectController::class, 'removeFromTeacher']);
-    Route::get('/subjects/{subjectId}/teachers', [SubjectController::class, 'getTeachersBySubject']);
-    Route::get('/subjects/school/{schoolId}', [SubjectController::class, 'getSubjectsBySchool']);
-    Route::post('/subjects/{subjectId}/assign-teachers', [SubjectController::class, 'assignMultipleTeachers']);
-    Route::get('/subjects/teacher/{teacherId}', [SubjectController::class, 'getSubjectsByTeacher']);
 
     // ---------------------
     // TEACHER ROUTES
     // ---------------------
-    // Specific routes FIRST (before apiResource)
+    // Custom routes for teacher-specific operations
+    Route::get('teachers/{teacherId}/assignments', [TeacherController::class, 'getAssignments']);
     Route::get('/teachers/class-teachers', [TeacherController::class, 'getAllClassTeachers']);
     Route::get('/teachers/school/{schoolId}', [TeacherController::class, 'getTeachersBySchool']);
     Route::get('/teachers/stream/{streamId}', [TeacherController::class, 'getTeachersByStream']);
@@ -100,12 +102,18 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/teachers/{teacherId}/streams-as-class-teacher', [TeacherController::class, 'getStreamsAsClassTeacher']);
     Route::get('/teachers/{teacherId}/streams-as-teacher', [TeacherController::class, 'getStreamsAsTeacher']);
 
-    // POST routes
-    Route::post('/teachers/{teacherId}/assign-subjects', [TeacherController::class, 'assignSubjects']);
-    Route::post('/teachers/{teacherId}/assign-stream', [TeacherController::class, 'assignToStream']);
-
     // apiResource LAST
     Route::apiResource('teachers', TeacherController::class);
+
+    // ---------------------
+    // PARENT ROUTES (NEW)
+    // ---------------------
+    // Custom routes for parent-specific operations
+    Route::get('parents/{parentId}/students', [ParentController::class, 'getStudents']);
+    Route::get('/parents/school/{schoolId}', [ParentController::class, 'getParentsBySchool']);
+
+    // apiResource LAST
+    Route::apiResource('parents', ParentController::class);
 
     // ---------------------
     // STUDENT ROUTES

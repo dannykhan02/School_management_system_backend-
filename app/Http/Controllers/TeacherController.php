@@ -3,30 +3,17 @@
 namespace App\Http\Controllers;
 
 use App\Models\Teacher;
+use App\Models\SubjectAssignment;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 
-class TeacherController extends Controller
+class TeacherController extends BaseController
 {
     /**
-     * Get the current user (supports Sanctum or manual testing).
-     */
-    private function getUser(Request $request)
-    {
-        $user = Auth::user();
-
-        // Allow fallback for Postman testing without login
-        if (!$user && $request->has('school_id')) {
-            $user = User::where('school_id', $request->school_id)->first();
-        }
-
-        return $user;
-    }
-
-    /**
      * Display a listing of teachers.
+     * Can be filtered by curriculum specialization using ?curriculum=CBC or ?curriculum=8-4-4
      */
     public function index(Request $request)
     {
@@ -36,14 +23,25 @@ class TeacherController extends Controller
             return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
         }
 
-        if (!$user->school_id) {
-            return response()->json(['message' => 'User is not associated with any school.'], 400);
-        }
+        $query = Teacher::with(['user', 'school', 'classTeacherStreams', 'teachingStreams'])
+            ->where('school_id', $user->school_id);
 
-        // Remove the 'classrooms' eager loading that was causing the error
-        $teachers = Teacher::with(['user', 'school', 'classTeacherStreams', 'teachingStreams'])
-            ->where('school_id', $user->school_id)
-            ->get();
+        // Filter by curriculum specialization if provided
+        if ($request->has('curriculum')) {
+            if ($request->curriculum === 'CBC') {
+                $query->where(function($q) {
+                    $q->where('curriculum_specialization', 'CBC')
+                      ->orWhere('curriculum_specialization', 'Both');
+                });
+            } elseif ($request->curriculum === '8-4-4') {
+                $query->where(function($q) {
+                    $q->where('curriculum_specialization', '8-4-4')
+                      ->orWhere('curriculum_specialization', 'Both');
+                });
+            }
+        }
+        
+        $teachers = $query->get();
 
         return response()->json([
             'status' => 'success',
@@ -52,7 +50,7 @@ class TeacherController extends Controller
     }
 
     /**
-     * Store a newly created teacher.
+     * Store a newly created teacher in storage.
      */
     public function store(Request $request)
     {
@@ -67,6 +65,10 @@ class TeacherController extends Controller
             'qualification' => 'nullable|string',
             'employment_type' => 'nullable|string',
             'tsc_number' => 'nullable|string',
+            'specialization' => 'nullable|string',
+            'curriculum_specialization' => 'required|in:CBC,8-4-4,Both',
+            'max_subjects' => 'nullable|integer|min:1',
+            'max_classes' => 'nullable|integer|min:1',
         ]);
 
         // Verify user belongs to same school
@@ -84,7 +86,14 @@ class TeacherController extends Controller
             'qualification' => $validated['qualification'] ?? null,
             'employment_type' => $validated['employment_type'] ?? null,
             'tsc_number' => $validated['tsc_number'] ?? null,
+            'specialization' => $validated['specialization'] ?? null,
+            'curriculum_specialization' => $validated['curriculum_specialization'],
+            'max_subjects' => $validated['max_subjects'] ?? null,
+            'max_classes' => $validated['max_classes'] ?? null,
         ]);
+
+        // Set default password for the teacher user
+        $this->setDefaultPassword($teacherUser);
 
         return response()->json([
             'status' => 'success',
@@ -105,7 +114,6 @@ class TeacherController extends Controller
         }
 
         try {
-            // Remove the 'classrooms' eager loading that was causing the error
             $teacher = Teacher::with(['user', 'school', 'classTeacherStreams', 'teachingStreams'])->findOrFail($id);
         } catch (ModelNotFoundException $e) {
             return response()->json([
@@ -114,8 +122,9 @@ class TeacherController extends Controller
             ], 404);
         }
 
-        if ($teacher->school_id !== $user->school_id) {
-            return response()->json(['message' => 'Unauthorized access to this teacher.'], 403);
+        $authError = $this->checkAuthorization($user, $teacher);
+        if ($authError) {
+            return $authError;
         }
 
         return response()->json([
@@ -125,7 +134,7 @@ class TeacherController extends Controller
     }
 
     /**
-     * Update the specified teacher.
+     * Update the specified teacher in storage.
      */
     public function update(Request $request, $id)
     {
@@ -144,14 +153,19 @@ class TeacherController extends Controller
             ], 404);
         }
 
-        if ($teacher->school_id !== $user->school_id) {
-            return response()->json(['message' => 'Unauthorized. This teacher does not belong to your school.'], 403);
+        $authError = $this->checkAuthorization($user, $teacher);
+        if ($authError) {
+            return $authError;
         }
 
         $validated = $request->validate([
             'qualification' => 'nullable|string',
             'employment_type' => 'nullable|string',
             'tsc_number' => 'nullable|string',
+            'specialization' => 'nullable|string',
+            'curriculum_specialization' => 'nullable|in:CBC,8-4-4,Both',
+            'max_subjects' => 'nullable|integer|min:1',
+            'max_classes' => 'nullable|integer|min:1',
         ]);
 
         $teacher->update($validated);
@@ -164,7 +178,7 @@ class TeacherController extends Controller
     }
 
     /**
-     * Remove the specified teacher.
+     * Remove the specified teacher from storage.
      */
     public function destroy(Request $request, $id)
     {
@@ -183,8 +197,9 @@ class TeacherController extends Controller
             ], 404);
         }
 
-        if ($teacher->school_id !== $user->school_id) {
-            return response()->json(['message' => 'Unauthorized. This teacher does not belong to your school.'], 403);
+        $authError = $this->checkAuthorization($user, $teacher);
+        if ($authError) {
+            return $authError;
         }
 
         $teacher->delete();
@@ -210,7 +225,6 @@ class TeacherController extends Controller
             return response()->json(['message' => 'Unauthorized.'], 403);
         }
 
-        // Remove the 'classrooms' eager loading that was causing the error
         $teachers = Teacher::with(['user', 'school', 'classTeacherStreams', 'teachingStreams'])
             ->where('school_id', $schoolId)
             ->get();
@@ -218,6 +232,29 @@ class TeacherController extends Controller
         return response()->json([
             'status' => 'success',
             'data' => $teachers
+        ]);
+    }
+
+    /**
+     * Get a teacher's subject assignments (workload).
+     */
+    public function getAssignments($teacherId)
+    {
+        $user = Auth::user();
+        $teacher = Teacher::findOrFail($teacherId);
+        
+        $authError = $this->checkAuthorization($user, $teacher);
+        if ($authError) {
+            return $authError;
+        }
+        
+        $assignments = SubjectAssignment::where('teacher_id', $teacherId)
+                                       ->with(['subject', 'academicYear', 'stream.classroom'])
+                                       ->get();
+        
+        return response()->json([
+            'teacher' => $teacher,
+            'assignments' => $assignments
         ]);
     }
 }

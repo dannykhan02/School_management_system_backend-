@@ -15,7 +15,7 @@ class User extends Authenticatable
     use HasFactory, Notifiable, HasApiTokens;
 
     protected $fillable = [
-        'school_id', 'role_id', 'full_name', 'email', 'phone', 'password', 'gender', 'status',
+        'school_id', 'role_id', 'full_name', 'email', 'phone', 'password', 'gender', 'status', 'must_change_password', 'last_password_changed_at',
     ];
 
     protected $hidden = [
@@ -24,6 +24,8 @@ class User extends Authenticatable
 
     protected $casts = [
         'email_verified_at' => 'datetime',
+        'last_password_changed_at' => 'datetime',
+        'must_change_password' => 'boolean',
     ];
 
     public function role(): BelongsTo

@@ -6,13 +6,14 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use App\Models\User;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
 
-class AuthController extends Controller
+class AuthController extends BaseController
 {
     public function login(Request $request)
     {
         $request->validate([
-            'login' => 'required|string', // can be email OR full name
+            'login' => 'required|string',
             'password' => 'required',
         ]);
 
@@ -53,6 +54,7 @@ class AuthController extends Controller
             'gender' => $user->gender,
             'status' => $user->status,
             'email_verified_at' => $user->email_verified_at,
+            'must_change_password' => $user->must_change_password ?? false,
             'token' => $token,
         ]);
     }
@@ -74,10 +76,17 @@ class AuthController extends Controller
             ], 401);
         }
 
-        $request->validate([
-            'current_password' => 'required|string',
-            'new_password' => 'required|min:6|confirmed',
-        ]);
+        try {
+            $request->validate([
+                'current_password' => 'required|string',
+                'new_password' => 'required|min:8|confirmed|different:current_password',
+            ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'message' => 'Validation failed',
+                'errors' => $e->errors()
+            ], 422);
+        }
 
         // Verify current password
         if (!Hash::check($request->current_password, $user->password)) {
@@ -86,12 +95,18 @@ class AuthController extends Controller
             ], 403);
         }
 
+        // Prevent reuse of recent passwords (optional security best practice)
+        // You can store old passwords and check them here
+
         // Update password
         $user->password = Hash::make($request->new_password);
         $user->must_change_password = false;
+        $user->last_password_changed_at = now();
         $user->save();
 
-        return response()->json(['message' => 'Password changed successfully.']);
+        return response()->json([
+            'message' => 'Password changed successfully.'
+        ]);
     }
 
     public function logout(Request $request)

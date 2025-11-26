@@ -13,5 +13,9 @@ class DatabaseSeeder extends Seeder
         
         // Then call the SuperAdminSeeder (needs roles to exist)
         $this->call(SuperAdminSeeder::class);
+
+        $this->call(AcademicYearSeeder::class);
+
+        $this->call(SubjectSeeder::class);
     }
 }
