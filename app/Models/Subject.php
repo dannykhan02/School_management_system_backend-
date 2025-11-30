@@ -34,6 +34,17 @@ class Subject extends Model
     }
 
     /**
+     * The streams that this subject is taught in.
+     * Only for schools with streams enabled.
+     */
+    public function streams(): BelongsToMany
+    {
+        return $this->belongsToMany(Stream::class, 'subject_stream')
+            ->withPivot('teacher_id', 'weekly_periods', 'assignment_type')
+            ->withTimestamps();
+    }
+
+    /**
      * Scope a query to only include CBC subjects.
      */
     public function scopeCbc($query)

@@ -15,14 +15,14 @@ class SubjectAssignment extends Model
     protected $fillable = [
         'teacher_id',
         'subject_id',
-        'academic_year_id',
+        'academic_year_id',  // This was missing!
         'stream_id',
         'weekly_periods',      // Number of periods per week for this subject
         'assignment_type',     // 'main_teacher', 'assistant_teacher', 'substitute'
     ];
 
     /**
-     * Get the subject for this assignment.
+     * Get subject for this assignment.
      */
     public function subject(): BelongsTo
     {
@@ -30,7 +30,7 @@ class SubjectAssignment extends Model
     }
 
     /**
-     * Get the teacher for this assignment.
+     * Get teacher for this assignment.
      */
     public function teacher(): BelongsTo
     {
@@ -38,7 +38,7 @@ class SubjectAssignment extends Model
     }
 
     /**
-     * Get the academic year for this assignment.
+     * Get academic year for this assignment.
      */
     public function academicYear(): BelongsTo
     {
@@ -46,7 +46,7 @@ class SubjectAssignment extends Model
     }
 
     /**
-     * Get the stream (class) for this assignment.
+     * Get stream (class) for this assignment.
      */
     public function stream(): BelongsTo
     {

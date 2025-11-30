@@ -58,13 +58,23 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Academic Years
     Route::apiResource('academic-years', AcademicYearController::class);
+    // Add this route after the existing academic-years resource route
+    Route::get('/academic-years/by-curriculum/{curriculum}', [AcademicYearController::class, 'getByCurriculum']);
 
     // ---------------------
     // CLASSROOM ROUTES
     // ---------------------
     Route::apiResource('classrooms', ClassroomController::class);
+    
+    // Stream-related classroom routes (for schools with streams)
     Route::get('/classrooms/{classroomId}/streams', [ClassroomController::class, 'getStreams']);
     Route::post('/classrooms/{classroomId}/streams', [ClassroomController::class, 'addStream']);
+    
+    // Teacher-related classroom routes (for schools without streams)
+    Route::get('/classrooms/{classroomId}/teachers', [ClassroomController::class, 'getTeachers']);
+    Route::post('/classrooms/{classroomId}/teachers', [ClassroomController::class, 'assignTeachers']);
+    Route::post('/classrooms/{classroomId}/class-teacher', [ClassroomController::class, 'assignClassTeacher']);
+    Route::delete('/classrooms/{classroomId}/class-teacher', [ClassroomController::class, 'removeClassTeacher']);
 
     // ---------------------
     // STREAM ROUTES
@@ -82,11 +92,15 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // ---------------------
     // SUBJECT ASSIGNMENT ROUTES
-    // ----------------a-----
+    // ---------------------
+    // Regular subject assignment routes
     Route::apiResource('subject-assignments', SubjectAssignmentController::class);
+    
+    // NEW: Batch assignment route for creating multiple assignments at once
+    Route::post('/subject-assignments/batch', [SubjectAssignmentController::class, 'storeBatch']);
 
     // ---------------------
-    // SUBJECT ROUTESaa
+    // SUBJECT ROUTES
     // ---------------------
     Route::apiResource('subjects', SubjectController::class);
 
@@ -98,7 +112,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/teachers/class-teachers', [TeacherController::class, 'getAllClassTeachers']);
     Route::get('/teachers/school/{schoolId}', [TeacherController::class, 'getTeachersBySchool']);
     Route::get('/teachers/stream/{streamId}', [TeacherController::class, 'getTeachersByStream']);
+    
+    // Routes for schools without streams
     Route::get('/teachers/{teacherId}/classrooms', [TeacherController::class, 'getClassrooms']);
+    Route::post('/teachers/{teacherId}/classrooms', [TeacherController::class, 'assignToClassroom']);
+    Route::delete('/teachers/{teacherId}/classrooms/{classroomId}', [TeacherController::class, 'removeFromClassroom']);
+    
+    // Routes for schools with streams
     Route::get('/teachers/{teacherId}/streams-as-class-teacher', [TeacherController::class, 'getStreamsAsClassTeacher']);
     Route::get('/teachers/{teacherId}/streams-as-teacher', [TeacherController::class, 'getStreamsAsTeacher']);
 
