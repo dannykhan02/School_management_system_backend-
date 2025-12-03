@@ -719,4 +719,70 @@ class StreamController extends Controller
             'data' => $stream->load(['teachers.user', 'classTeacher.user'])
         ]);
     }
+    
+    /**
+     * NEW: Assign a teacher to multiple streams as a regular teacher
+     * Only available for schools with streams enabled.
+     */
+    public function assignToMultipleStreams(Request $request)
+    {
+        $user = $this->getUser($request);
+        
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
+        }
+
+        // Check if school has streams enabled
+        if (!$this->checkSchoolStreamsEnabled($request)) {
+            return response()->json([
+                'message' => 'Your school does not have streams enabled.'
+            ], 403);
+        }
+
+        $validated = $request->validate([
+            'teacher_id' => 'required|integer|exists:teachers,id',
+            'stream_ids' => 'required|array',
+            'stream_ids.*' => 'integer|exists:streams,id',
+        ]);
+
+        $teacher = Teacher::find($validated['teacher_id']);
+        
+        if (!$teacher || $teacher->school_id !== $user->school_id) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'The teacher must belong to the same school.',
+                'errors' => ['teacher_id' => ['The selected teacher is invalid or does not belong to your school.']]
+            ], 422);
+        }
+
+        // Verify all streams belong to the same school
+        $streams = Stream::whereIn('id', $validated['stream_ids'])->get();
+        foreach ($streams as $stream) {
+            if ($stream->school_id !== $user->school_id) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'All streams must belong to the same school.',
+                    'errors' => ['stream_ids' => ['Stream with ID ' . $stream->id . ' does not belong to your school.']]
+                ], 422);
+            }
+        }
+
+        // Assign teacher to all streams as a regular teacher (not class teacher)
+        foreach ($validated['stream_ids'] as $streamId) {
+            $stream = Stream::find($streamId);
+            // Don't override existing class teacher assignment
+            if ($stream->class_teacher_id != $validated['teacher_id']) {
+                $stream->teachers()->syncWithoutDetaching([$validated['teacher_id']]);
+            }
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Teacher assigned to multiple streams successfully.',
+            'data' => [
+                'teacher_id' => $validated['teacher_id'],
+                'stream_ids' => $validated['stream_ids']
+            ]
+        ]);
+    }
 }

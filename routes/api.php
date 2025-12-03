@@ -75,6 +75,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/classrooms/{classroomId}/teachers', [ClassroomController::class, 'assignTeachers']);
     Route::post('/classrooms/{classroomId}/class-teacher', [ClassroomController::class, 'assignClassTeacher']);
     Route::delete('/classrooms/{classroomId}/class-teacher', [ClassroomController::class, 'removeClassTeacher']);
+    
+    // NEW: Assign a teacher to multiple classrooms
+    Route::post('/teachers/assign-to-multiple-classrooms', [ClassroomController::class, 'assignToMultipleClassrooms']);
+    
+    // NEW: Get available classrooms for a teacher based on max_classes limit
+    Route::get('/teachers/{teacherId}/available-classrooms', [ClassroomController::class, 'getAvailableClassroomsForTeacher']);
 
     // ---------------------
     // STREAM ROUTES
@@ -86,6 +92,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/streams/{streamId}/assign-class-teacher', [StreamController::class, 'assignClassTeacher']);
     Route::delete('/streams/{streamId}/remove-class-teacher', [StreamController::class, 'removeClassTeacher']);
     Route::post('/streams/{streamId}/assign-teachers', [StreamController::class, 'assignTeachers']);
+    
+    // NEW: Assign a teacher to multiple streams
+    Route::post('/teachers/assign-to-multiple-streams', [StreamController::class, 'assignToMultipleStreams']);
     
     // apiResource MUST come AFTER specific routes
     Route::apiResource('streams', StreamController::class);

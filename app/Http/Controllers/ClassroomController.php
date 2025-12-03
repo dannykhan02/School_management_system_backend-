@@ -9,6 +9,7 @@ use App\Models\Stream;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class ClassroomController extends Controller
@@ -98,7 +99,6 @@ class ClassroomController extends Controller
             'school_id' => $validated['school_id'],
         ];
 
-        // Add capacity only for non-stream schools
         if (!$hasStreams) {
             $classroomData['capacity'] = $validated['capacity'];
         }
@@ -115,6 +115,19 @@ class ClassroomController extends Controller
                             'message' => 'One or more class teachers do not belong to your school.'
                         ], 422);
                     }
+                    
+                    $existingStream = Stream::where('class_teacher_id', $streamData['class_teacher_id'])
+                        ->where('school_id', $user->school_id)
+                        ->first();
+                        
+                    if ($existingStream) {
+                        return response()->json([
+                            'status' => 'error',
+                            'message' => 'This teacher is already assigned as a class teacher to another stream.',
+                            'errors' => ['class_teacher_id' => ['A teacher can only be a class teacher for one stream.']],
+                            'existing_stream' => $existingStream->name
+                        ], 422);
+                    }
                 }
 
                 Stream::create([
@@ -128,6 +141,8 @@ class ClassroomController extends Controller
         }
 
         if (!$hasStreams && isset($validated['teachers'])) {
+            $classTeacherIds = [];
+            
             foreach ($validated['teachers'] as $teacherData) {
                 $teacher = Teacher::find($teacherData['teacher_id']);
 
@@ -138,9 +153,75 @@ class ClassroomController extends Controller
                     ], 422);
                 }
 
+                $isClassTeacher = $teacherData['is_class_teacher'] ?? false;
+                
+                if ($isClassTeacher) {
+                    $classTeacherIds[] = $teacher->id;
+                    
+                    $existingClassroom = Classroom::whereHas('teachers', function ($query) use ($teacher) {
+                            $query->where('teacher_id', $teacher->id)
+                                  ->where('is_class_teacher', true);
+                        })
+                        ->where('id', '!=', $classroom->id)
+                        ->where('school_id', $user->school_id)
+                        ->first();
+
+                    if ($existingClassroom) {
+                        return response()->json([
+                            'status' => 'error',
+                            'message' => 'This teacher is already assigned as a class teacher to another classroom.',
+                            'errors' => ['is_class_teacher' => ['A teacher can only be a class teacher for one classroom.']],
+                            'existing_classroom' => $existingClassroom->class_name
+                        ], 422);
+                    }
+                }
+
+                // Fixed: Get current class count directly from the pivot table
+                $currentClassCount = DB::table('classroom_teacher')
+                    ->where('teacher_id', $teacher->id)
+                    ->count();
+                    
+                $maxClasses = $teacher->max_classes ?? 10;
+                
+                // Check if teacher is already assigned to this classroom
+                $alreadyAssigned = DB::table('classroom_teacher')
+                    ->where('teacher_id', $teacher->id)
+                    ->where('classroom_id', $classroom->id)
+                    ->first();
+                
+                // If not already assigned, this will be a new assignment
+                $newClassCount = $alreadyAssigned ? $currentClassCount : $currentClassCount + 1;
+                
+                if ($newClassCount > $maxClasses) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'This teacher has reached their maximum number of classes.',
+                        'errors' => ['teacher_id' => [
+                            'Teacher is already assigned to ' . $currentClassCount . ' classes, ' .
+                            'which is the maximum allowed (' . $maxClasses . ').'
+                        ]]
+                    ], 422);
+                }
+
+                if ($alreadyAssigned) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'This teacher is already assigned to this classroom.',
+                        'errors' => ['teacher_id' => ['Teacher is already assigned to this classroom.']]
+                    ], 422);
+                }
+
                 $classroom->teachers()->attach($teacher->id, [
-                    'is_class_teacher' => $teacherData['is_class_teacher'] ?? false
+                    'is_class_teacher' => $isClassTeacher
                 ]);
+            }
+            
+            if (count($classTeacherIds) > 1) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Only one teacher can be assigned as a class teacher.',
+                    'errors' => ['is_class_teacher' => ['Multiple teachers cannot be marked as class teachers.']]
+                ], 422);
             }
         }
 
@@ -174,7 +255,7 @@ class ClassroomController extends Controller
                 return response()->json(['message' => 'Unauthorized access to this classroom.'], 403);
 
         } catch (ModelNotFoundException $e) {
-            return response()->json(['status' => 'error', 'message' => 'No classroom found with the specified ID.'], 404);
+            return response()->json(['status' => 'error', 'message' => 'No classroom found with specified ID.'], 404);
         }
 
         return response()->json([
@@ -205,7 +286,6 @@ class ClassroomController extends Controller
             'school_id' => 'sometimes|required|integer|exists:schools,id'
         ];
 
-        // Only allow capacity update for schools without streams
         if (!$hasStreams) {
             $validationRules['capacity'] = 'sometimes|required|integer|min:1';
         }
@@ -215,7 +295,6 @@ class ClassroomController extends Controller
         if (isset($validated['school_id']) && $validated['school_id'] != $user->school_id)
             return response()->json(['status' => 'error', 'message' => 'You cannot change the school of a classroom.'], 403);
 
-        // If capacity is being updated for a school with streams, return error
         if ($hasStreams && $request->has('capacity')) {
             return response()->json([
                 'status' => 'error',
@@ -320,6 +399,19 @@ class ClassroomController extends Controller
                     'status' => 'error',
                     'message' => 'The class teacher must belong to the same school.',
                 ], 422);
+                
+            $existingStream = Stream::where('class_teacher_id', $validated['class_teacher_id'])
+                ->where('school_id', $user->school_id)
+                ->first();
+                
+            if ($existingStream) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'This teacher is already assigned as a class teacher to another stream.',
+                    'errors' => ['class_teacher_id' => ['A teacher can only be a class teacher for one stream.']],
+                    'existing_stream' => $existingStream->name
+                ], 422);
+            }
         }
 
         $stream = Stream::create([
@@ -409,14 +501,56 @@ class ClassroomController extends Controller
             $isClassTeacher = $t['is_class_teacher'] ?? false;
             if ($isClassTeacher) {
                 $classTeacherIds[] = $teacher->id;
+                
+                $existingClassroom = Classroom::whereHas('teachers', function ($query) use ($teacher) {
+                        $query->where('teacher_id', $teacher->id)
+                              ->where('is_class_teacher', true);
+                    })
+                    ->where('id', '!=', $classroomId)
+                    ->where('school_id', $user->school_id)
+                    ->first();
+
+                if ($existingClassroom) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'This teacher is already assigned as a class teacher to another classroom.',
+                        'errors' => ['is_class_teacher' => ['A teacher can only be a class teacher for one classroom.']],
+                        'existing_classroom' => $existingClassroom->class_name
+                    ], 422);
+                }
+            }
+
+            // Fixed: Get current class count directly from the pivot table
+            $currentClassCount = DB::table('classroom_teacher')
+                ->where('teacher_id', $teacher->id)
+                ->count();
+                
+            $maxClasses = $teacher->max_classes ?? 10;
+            
+            $alreadyAssigned = DB::table('classroom_teacher')
+                ->where('teacher_id', $teacher->id)
+                ->where('classroom_id', $classroomId)
+                ->first();
+            
+            // If not already assigned, this will be a new assignment
+            $newClassCount = $alreadyAssigned ? $currentClassCount : $currentClassCount + 1;
+            
+            if ($newClassCount > $maxClasses) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'This teacher has reached their maximum number of classes.',
+                    'errors' => ['teacher_id' => [
+                        'Teacher is already assigned to ' . $currentClassCount . ' classes, ' .
+                        'which is the maximum allowed (' . $maxClasses . ').'
+                    ]]
+                ], 422);
             }
 
             $teacherAssignments[$teacher->id] = [
-                'is_class_teacher' => $isClassTeacher
+                'is_class_teacher' => $isClassTeacher ? 1 : 0
             ];
         }
 
-        // Ensure only one class teacher is assigned
         if (count($classTeacherIds) > 1) {
             return response()->json([
                 'status' => 'error',
@@ -425,7 +559,7 @@ class ClassroomController extends Controller
             ], 422);
         }
 
-        $classroom->teachers()->sync($teacherAssignments);
+        $classroom->teachers()->syncWithoutDetaching($teacherAssignments);
 
         return response()->json([
             'status' => 'success',
@@ -475,10 +609,8 @@ class ClassroomController extends Controller
             ], 422);
         }
 
-        // Use a local variable for the closure to avoid array dereference in use()
         $teacherId = $validated['teacher_id'];
 
-        // Check if teacher is already a class teacher for another classroom
         $existingClassroom = Classroom::whereHas('teachers', function ($query) use ($teacherId) {
                 $query->where('teacher_id', $teacherId)
                       ->where('is_class_teacher', true);
@@ -496,16 +628,94 @@ class ClassroomController extends Controller
             ], 422);
         }
 
-        // Remove existing class teacher if any
-        $currentClassTeacher = $classroom->teachers()->wherePivot('is_class_teacher', true)->first();
-        if ($currentClassTeacher) {
-            $classroom->teachers()->updateExistingPivot($currentClassTeacher->id, ['is_class_teacher' => false]);
+        // Fixed: Get current class count directly from the pivot table
+        $currentClassCount = DB::table('classroom_teacher')
+            ->where('teacher_id', $teacherId)
+            ->count();
+            
+        $maxClasses = $teacher->max_classes ?? 10;
+        
+        $alreadyAssigned = DB::table('classroom_teacher')
+            ->where('teacher_id', $teacherId)
+            ->where('classroom_id', $classroomId)
+            ->first();
+        
+        // If not already assigned, this will be a new assignment
+        $newClassCount = $alreadyAssigned ? $currentClassCount : $currentClassCount + 1;
+        
+        if ($newClassCount > $maxClasses) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'This teacher has reached their maximum number of classes.',
+                'errors' => ['teacher_id' => [
+                    'Teacher is already assigned to ' . $currentClassCount . ' classes, ' .
+                    'which is the maximum allowed (' . $maxClasses . ').'
+                ]]
+            ], 422);
         }
 
-        // Assign new class teacher
-        $classroom->teachers()->syncWithoutDetaching([
-            $validated['teacher_id'] => ['is_class_teacher' => true]
-        ]);
+        // Use transaction to ensure data integrity
+        DB::beginTransaction();
+        try {
+            // 1. Find and REMOVE the existing class teacher for this classroom (if any)
+            $existingClassTeacher = DB::table('classroom_teacher')
+                ->where('classroom_id', $classroomId)
+                ->where('is_class_teacher', 1)
+                ->first();
+            
+            if ($existingClassTeacher) {
+                // Demote the existing teacher by setting is_class_teacher to 0
+                // This will AUTOMATICALLY set is_class_teacher_unique to NULL
+                DB::table('classroom_teacher')
+                    ->where('id', $existingClassTeacher->id)
+                    ->update(['is_class_teacher' => 0]);
+            }
+            
+            // 2. Check if the new teacher is already assigned to this classroom
+            $existingAssignment = DB::table('classroom_teacher')
+                ->where('teacher_id', $teacherId)
+                ->where('classroom_id', $classroomId)
+                ->first();
+            
+            if ($existingAssignment) {
+                // Promote the existing assignment to be the class teacher
+                // This will AUTOMATICALLY set is_class_teacher_unique to 1
+                DB::table('classroom_teacher')
+                    ->where('id', $existingAssignment->id)
+                    ->update([
+                        'is_class_teacher' => 1,
+                        'updated_at' => now()
+                    ]);
+            } else {
+                // 3. Insert a new record for the new class teacher
+                // is_class_teacher_unique will be AUTOMATICALLY calculated by the DB
+                DB::table('classroom_teacher')->insert([
+                    'classroom_id' => $classroomId,
+                    'teacher_id' => $teacherId,
+                    'is_class_teacher' => 1,
+                    'created_at' => now(),
+                    'updated_at' => now()
+                ]);
+            }
+
+            DB::commit();
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            if ($e->getCode() == 23000 && strpos($e->getMessage(), 'Duplicate entry') !== false) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'This teacher is already assigned to this classroom.',
+                    'errors' => ['teacher_id' => ['Teacher is already assigned to this classroom.']]
+                ], 422);
+            }
+            
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Failed to assign class teacher.',
+                'error' => $e->getMessage()
+            ], 500);
+        }
 
         return response()->json([
             'status' => 'success',
@@ -541,17 +751,206 @@ class ClassroomController extends Controller
         if ($classroom->school_id !== $user->school_id)
             return response()->json(['message' => 'Unauthorized.'], 403);
 
-        // Find and update the class teacher
-        $classTeacher = $classroom->teachers()->wherePivot('is_class_teacher', true)->first();
-        
-        if ($classTeacher) {
-            $classroom->teachers()->updateExistingPivot($classTeacher->id, ['is_class_teacher' => false]);
-        }
+        // Update all class teachers to regular teachers by changing is_class_teacher to 0
+        // This will AUTOMATICALLY update is_class_teacher_unique to NULL
+        DB::table('classroom_teacher')
+            ->where('classroom_id', $classroomId)
+            ->where('is_class_teacher', 1)
+            ->update(['is_class_teacher' => 0]);
 
         return response()->json([
             'status' => 'success',
             'message' => 'Class teacher removed successfully.',
             'data' => $classroom->load(['teachers'])
+        ]);
+    }
+    
+    /**
+     * Assign a teacher to multiple classrooms as a regular teacher
+     * Only available for schools without streams enabled.
+     */
+    public function assignToMultipleClassrooms(Request $request)
+    {
+        $user = $this->getUser($request);
+        if (!$user) return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
+
+        if ($this->checkSchoolStreamsEnabled($request)) {
+            return response()->json([
+                'message' => 'Your school has streams enabled. Teachers should be assigned to streams, not classrooms.'
+            ], 403);
+        }
+
+        $validated = $request->validate([
+            'teacher_id' => 'required|integer|exists:teachers,id',
+            'classroom_ids' => 'required|array',
+            'classroom_ids.*' => 'integer|exists:classrooms,id',
+        ]);
+
+        $teacher = Teacher::find($validated['teacher_id']);
+        
+        if (!$teacher || $teacher->school_id !== $user->school_id) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'The teacher must belong to the same school.',
+                'errors' => ['teacher_id' => ['The selected teacher is invalid or does not belong to your school.']]
+            ], 422);
+        }
+
+        $classrooms = Classroom::whereIn('id', $validated['classroom_ids'])->get();
+        foreach ($classrooms as $classroom) {
+            if ($classroom->school_id !== $user->school_id) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'All classrooms must belong to the same school.',
+                    'errors' => ['classroom_ids' => ['Classroom with ID ' . $classroom->id . ' does not belong to your school.']]
+                ], 422);
+            }
+        }
+
+        $teacherId = $validated['teacher_id'];
+        $assignedClassrooms = [];
+        $skippedClassrooms = [];
+        
+        // Fixed: Get current class count directly from the pivot table
+        $currentClassCount = DB::table('classroom_teacher')
+            ->where('teacher_id', $teacherId)
+            ->count();
+            
+        $maxClasses = $teacher->max_classes ?? 10;
+        $availableSlots = $maxClasses - $currentClassCount;
+        
+        if ($availableSlots <= 0) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'This teacher has reached their maximum number of classes.',
+                'errors' => ['teacher_id' => [
+                    'Teacher is already assigned to ' . $currentClassCount . ' classes, ' .
+                    'which is the maximum allowed (' . $maxClasses . ').'
+                ]]
+            ], 422);
+        }
+        
+        $requestedClassrooms = $validated['classroom_ids'];
+        if (count($requestedClassrooms) > $availableSlots) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Cannot assign teacher to all requested classrooms.',
+                'errors' => ['classroom_ids' => [
+                    'Teacher can only be assigned to ' . $availableSlots . ' more classes, ' .
+                    'but ' . count($requestedClassrooms) . ' were requested.'
+                ]]
+            ], 422);
+        }
+        
+        DB::beginTransaction();
+        try {
+            foreach ($validated['classroom_ids'] as $classroomId) {
+                $existingAssignment = DB::table('classroom_teacher')
+                    ->where('teacher_id', $teacherId)
+                    ->where('classroom_id', $classroomId)
+                    ->first();
+                
+                if ($existingAssignment) {
+                    $skippedClassrooms[] = $classroomId;
+                    continue;
+                }
+                
+                // Insert new record
+                // is_class_teacher_unique will be AUTOMATICALLY calculated based on is_class_teacher
+                DB::table('classroom_teacher')->insert([
+                    'classroom_id' => $classroomId,
+                    'teacher_id' => $teacherId,
+                    'is_class_teacher' => 0,
+                    'created_at' => now(),
+                    'updated_at' => now()
+                ]);
+                
+                $assignedClassrooms[] = $classroomId;
+            }
+            
+            DB::commit();
+            
+            $message = 'Teacher assigned to classrooms successfully.';
+            if (count($skippedClassrooms) > 0) {
+                $message .= ' Some classrooms were skipped because the teacher is already assigned to them.';
+            }
+            
+            return response()->json([
+                'status' => 'success',
+                'message' => $message,
+                'data' => [
+                    'teacher_id' => $teacherId,
+                    'assigned_to' => $assignedClassrooms,
+                    'already_assigned' => $skippedClassrooms,
+                    'total_requested' => count($validated['classroom_ids']),
+                    'newly_assigned' => count($assignedClassrooms),
+                    'skipped' => count($skippedClassrooms),
+                    'max_classes' => $maxClasses,
+                    'current_class_count' => $currentClassCount + count($assignedClassrooms)
+                ]
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Failed to assign teacher to classrooms.',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+    
+    /**
+     * Get available classrooms for a teacher based on their max_classes limit
+     */
+    public function getAvailableClassroomsForTeacher(Request $request, $teacherId)
+    {
+        $user = $this->getUser($request);
+        if (!$user) return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
+
+        if ($this->checkSchoolStreamsEnabled($request)) {
+            return response()->json([
+                'message' => 'Your school has streams enabled. Teachers are assigned to streams, not classrooms.'
+            ], 403);
+        }
+
+        try {
+            $teacher = Teacher::findOrFail($teacherId);
+        } catch (ModelNotFoundException $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No teacher found with the specified ID.'
+            ], 404);
+        }
+
+        if ($teacher->school_id !== $user->school_id) {
+            return response()->json(['message' => 'Unauthorized.'], 403);
+        }
+
+        // Fixed: Get current class count directly from the pivot table
+        $currentClassCount = DB::table('classroom_teacher')
+            ->where('teacher_id', $teacherId)
+            ->count();
+            
+        $maxClasses = $teacher->max_classes ?? 10;
+        $availableSlots = $maxClasses - $currentClassCount;
+        
+        $availableClassrooms = Classroom::where('school_id', $user->school_id)
+            ->whereNotIn('id', function($query) use ($teacherId) {
+                $query->select('classroom_id')
+                    ->from('classroom_teacher')
+                    ->where('teacher_id', $teacherId);
+            })
+            ->get();
+
+        return response()->json([
+            'status' => 'success',
+            'data' => [
+                'teacher_id' => $teacherId,
+                'current_class_count' => $currentClassCount,
+                'max_classes' => $maxClasses,
+                'available_slots' => $availableSlots,
+                'available_classrooms' => $availableClassrooms
+            ]
         ]);
     }
 }
