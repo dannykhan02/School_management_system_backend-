@@ -25,6 +25,7 @@ class SchoolController extends Controller
         $schools = $schools->map(function($school) {
             $schoolData = $school->toArray();
             $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
+            $schoolData['curriculum_levels'] = $school->curriculum_levels;
             return $schoolData;
         });
 
@@ -42,14 +43,22 @@ class SchoolController extends Controller
         $data = $request->validate([
             'school.name' => 'required|string|max:255|unique:schools,name',
             'school.address' => 'required|string|max:500',
-            'school.school_type' => 'required|in:Primary,Secondary',
+            'school.school_type' => 'required|in:Primary,Secondary,Mixed',
             'school.city' => 'required|string|max:100',
             'school.code' => 'required|string|max:50|unique:schools,code',
             'school.phone' => 'required|string|max:20',
             'school.email' => 'required|email|max:255',
             'school.logo' => 'nullable|file|mimes:jpg,jpeg,png|max:5120',
             'school.primary_curriculum' => 'required|in:CBC,8-4-4,Both',
+            'school.secondary_curriculum' => 'nullable|in:CBC,8-4-4,Both',
             'school.has_streams' => 'sometimes|boolean',
+            'school.has_pre_primary' => 'sometimes|boolean',
+            'school.has_primary' => 'sometimes|boolean',
+            'school.has_junior_secondary' => 'sometimes|boolean',
+            'school.has_senior_secondary' => 'sometimes|boolean',
+            'school.has_secondary' => 'sometimes|boolean',
+            'school.senior_secondary_pathways' => 'nullable|array',
+            'school.senior_secondary_pathways.*' => 'nullable|in:STEM,Arts,Social Sciences',
             
             'admin.full_name' => 'required|string|max:255',
             'admin.email' => 'required|email|max:255|unique:users,email',
@@ -82,7 +91,14 @@ class SchoolController extends Controller
                 'email' => $data['school']['email'] ?? null,
                 'logo' => $logoPath,
                 'primary_curriculum' => $data['school']['primary_curriculum'],
+                'secondary_curriculum' => $data['school']['secondary_curriculum'] ?? $data['school']['primary_curriculum'],
                 'has_streams' => $data['school']['has_streams'] ?? false,
+                'has_pre_primary' => $data['school']['has_pre_primary'] ?? false,
+                'has_primary' => $data['school']['has_primary'] ?? false,
+                'has_junior_secondary' => $data['school']['has_junior_secondary'] ?? false,
+                'has_senior_secondary' => $data['school']['has_senior_secondary'] ?? false,
+                'has_secondary' => $data['school']['has_secondary'] ?? false,
+                'senior_secondary_pathways' => $data['school']['senior_secondary_pathways'] ?? null,
             ]);
 
             // 3️⃣ Get or create admin role
@@ -102,9 +118,14 @@ class SchoolController extends Controller
 
             DB::commit();
 
+            // Load curriculum levels
+            $schoolData = $school->toArray();
+            $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
+            $schoolData['curriculum_levels'] = $school->curriculum_levels;
+
             return response()->json([
                 'message' => 'School and admin user created successfully',
-                'school' => $school,
+                'school' => $schoolData,
                 'admin' => $user,
                 'logo_url' => $logoPath ? asset('storage/' . $logoPath) : null
             ], 201);
@@ -123,6 +144,7 @@ class SchoolController extends Controller
     {
         $schoolData = $school->toArray();
         $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
+        $schoolData['curriculum_levels'] = $school->curriculum_levels;
 
         return response()->json([
             'message' => 'School fetched successfully',
@@ -147,6 +169,7 @@ class SchoolController extends Controller
 
         $schoolData = $school->toArray();
         $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
+        $schoolData['curriculum_levels'] = $school->curriculum_levels;
 
         return response()->json([
             'message' => 'School fetched successfully',
@@ -162,14 +185,22 @@ class SchoolController extends Controller
         $data = $request->validate([
             'name' => 'sometimes|required|string|max:255|unique:schools,name,' . $school->id,
             'address' => 'nullable|string|max:500',
-            'school_type' => 'nullable|in:Primary,Secondary',
+            'school_type' => 'nullable|in:Primary,Secondary,Mixed',
             'city' => 'nullable|string|max:100',
             'code' => 'nullable|string|max:50|unique:schools,code,' . $school->id,
             'phone' => 'nullable|string|max:20',
             'email' => 'nullable|email|max:255',
             'logo' => 'nullable|file|mimes:jpg,jpeg,png|max:5120',
             'primary_curriculum' => 'sometimes|required|in:CBC,8-4-4,Both',
-            'has_streams' => 'sometimes|boolean'
+            'secondary_curriculum' => 'nullable|in:CBC,8-4-4,Both',
+            'has_streams' => 'sometimes|boolean',
+            'has_pre_primary' => 'sometimes|boolean',
+            'has_primary' => 'sometimes|boolean',
+            'has_junior_secondary' => 'sometimes|boolean',
+            'has_senior_secondary' => 'sometimes|boolean',
+            'has_secondary' => 'sometimes|boolean',
+            'senior_secondary_pathways' => 'nullable|array',
+            'senior_secondary_pathways.*' => 'nullable|in:STEM,Arts,Social Sciences'
         ], [
             'name.unique' => 'A school with this name already exists.',
             'code.unique' => 'This school code is already in use.',
@@ -191,6 +222,7 @@ class SchoolController extends Controller
         // Return updated school with full logo URL
         $schoolData = $school->toArray();
         $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
+        $schoolData['curriculum_levels'] = $school->curriculum_levels;
 
         return response()->json([
             'message' => 'School updated successfully',
