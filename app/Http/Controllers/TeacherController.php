@@ -7,6 +7,7 @@ use App\Models\SubjectAssignment;
 use App\Models\User;
 use App\Models\School;
 use App\Models\Classroom;
+use App\Models\Stream;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -699,6 +700,129 @@ class TeacherController extends Controller
 
         return response()->json([
             'status' => 'success',
+            'data' => $teachers
+        ]);
+    }
+
+    /**
+     * NEW METHOD: Get teachers with their teaching assignments (classrooms or streams).
+     * For schools without streams: returns teachers with classrooms they teach
+     * For schools with streams: returns teachers with streams they teach
+     */
+    public function getTeachersWithAssignments(Request $request)
+    {
+        $user = $this->getUser($request);
+        
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
+        }
+
+        // Get school information to check if streams are enabled
+        $school = School::find($user->school_id);
+        $hasStreams = $school ? $school->has_streams : false;
+
+        $query = Teacher::with(['user', 'school']);
+
+        // Load appropriate relationships based on school configuration
+        if ($hasStreams) {
+            // For schools with streams
+            $query->with([
+                'classTeacherStreams.classroom',
+                'teachingStreams.classroom'
+            ]);
+        } else {
+            // For schools without streams
+            $query->with([
+                'classrooms' => function($query) {
+                    $query->withPivot('is_class_teacher');
+                }
+            ]);
+        }
+
+        $query->where('school_id', $user->school_id);
+
+        // Optionally filter by curriculum specialization
+        if ($request->has('curriculum')) {
+            if ($request->curriculum === 'CBC') {
+                $query->where(function($q) {
+                    $q->where('curriculum_specialization', 'CBC')
+                      ->orWhere('curriculum_specialization', 'Both');
+                });
+            } elseif ($request->curriculum === '8-4-4') {
+                $query->where(function($q) {
+                    $q->where('curriculum_specialization', '8-4-4')
+                      ->orWhere('curriculum_specialization', 'Both');
+                });
+            }
+        }
+        
+        $teachers = $query->get()->map(function($teacher) use ($hasStreams) {
+            // Get the user data and handle cases where user might not exist
+            $userName = $teacher->user ? $teacher->user->full_name : 'N/A';
+            $userEmail = $teacher->user ? $teacher->user->email : 'N/A';
+            $userPhone = $teacher->user ? $teacher->user->phone : 'N/A';
+            
+            $teacherData = [
+                'id' => $teacher->id,
+                'name' => $userName,
+                'email' => $userEmail,
+                'phone' => $userPhone,
+                'qualification' => $teacher->qualification,
+                'employment_type' => $teacher->employment_type,
+                'tsc_number' => $teacher->tsc_number,
+                'specialization' => $teacher->specialization,
+                'curriculum_specialization' => $teacher->curriculum_specialization,
+                'max_subjects' => $teacher->max_subjects,
+                'max_classes' => $teacher->max_classes,
+            ];
+
+            if ($hasStreams) {
+                // For schools with streams
+                $teacherData['class_teacher_streams'] = $teacher->classTeacherStreams->map(function($stream) {
+                    return [
+                        'stream_id' => $stream->id,
+                        'stream_name' => $stream->stream_name,
+                        'classroom_name' => $stream->classroom->class_name ?? 'N/A',
+                        'full_name' => ($stream->classroom->class_name ?? 'N/A') . ' - ' . $stream->stream_name,
+                    ];
+                });
+
+                $teacherData['teaching_streams'] = $teacher->teachingStreams->map(function($stream) {
+                    return [
+                        'stream_id' => $stream->id,
+                        'stream_name' => $stream->stream_name,
+                        'classroom_name' => $stream->classroom->class_name ?? 'N/A',
+                        'full_name' => ($stream->classroom->class_name ?? 'N/A') . ' - ' . $stream->stream_name,
+                    ];
+                });
+            } else {
+                // For schools without streams
+                $teacherData['classrooms'] = $teacher->classrooms->map(function($classroom) {
+                    return [
+                        'classroom_id' => $classroom->id,
+                        'classroom_name' => $classroom->class_name,
+                        'is_class_teacher' => (bool)$classroom->pivot->is_class_teacher,
+                    ];
+                });
+
+                // Separate class teacher classrooms
+                $teacherData['class_teacher_classrooms'] = $teacher->classrooms
+                    ->where('pivot.is_class_teacher', true)
+                    ->map(function($classroom) {
+                        return [
+                            'classroom_id' => $classroom->id,
+                            'classroom_name' => $classroom->class_name,
+                        ];
+                    })->values();
+            }
+
+            return $teacherData;
+        });
+
+        return response()->json([
+            'status' => 'success',
+            'has_streams' => $hasStreams,
+            'school_name' => $school->school_name ?? 'N/A',
             'data' => $teachers
         ]);
     }

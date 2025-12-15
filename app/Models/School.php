@@ -33,6 +33,7 @@ class School extends Model
         'has_senior_secondary', // Whether the school offers Senior Secondary education
         'has_secondary', // Whether the school offers Secondary education (8-4-4)
         'senior_secondary_pathways', // JSON array of pathways: ['STEM', 'Arts', 'Social Sciences']
+        'grade_levels', // JSON array of grade levels or class levels
     ];
 
     /**
@@ -48,6 +49,7 @@ class School extends Model
         'has_senior_secondary' => 'boolean',
         'has_secondary' => 'boolean',
         'senior_secondary_pathways' => 'array',
+        'grade_levels' => 'array',
     ];
 
     /**

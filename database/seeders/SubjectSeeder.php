@@ -27,57 +27,25 @@ class SubjectSeeder extends Seeder
             $this->command->info("Seeding subjects for school: {$school->name} (ID: {$school->id})");
 
             foreach ($subjectsData as $curriculum => $levels) {
-                // 1. Check if the school offers this curriculum type
-                $offersCurriculum = false;
-                if ($curriculum === 'CBC') {
-                    $offersCurriculum = in_array($school->primary_curriculum, ['CBC', 'Both']) ||
-                                       in_array($school->secondary_curriculum ?? $school->primary_curriculum, ['CBC', 'Both']);
-                } elseif ($curriculum === '8-4-4') {
-                    // A school can offer 8-4-4 in primary or secondary or both
-                    $offersCurriculum = in_array($school->primary_curriculum, ['8-4-4', 'Both']) ||
-                                       in_array($school->secondary_curriculum ?? $school->primary_curriculum, ['8-4-4', 'Both']);
-                }
-
-                if (!$offersCurriculum) {
-                    $this->command->line("  - Skipping {$curriculum} curriculum (not offered by this school).");
-                    continue; // Skip to the next curriculum
-                }
-
                 $this->command->line("  - Processing {$curriculum} curriculum...");
                 
                 foreach ($levels as $levelName => $levelData) {
-                    // 2. Check if the school offers this specific educational level
-                    $level = $levelData['level'];
-                    $levelField = 'has_' . strtolower(str_replace(' ', '_', $level));
-
-                    if (!isset($school->$levelField) || $school->$levelField !== true) {
-                        $this->command->line("    - Skipping level '{$level}' (not offered by this school).");
-                        continue; // Skip to the next level
-                    }
-
-                    // 3. For Senior Secondary, check if the school offers this pathway
-                    if ($level === 'Senior Secondary' && isset($levelData['pathway'])) {
-                        if (!$school->offersPathway($levelData['pathway'])) {
-                            $this->command->line("    - Skipping pathway '{$levelData['pathway']}' (not offered by this school).");
-                            continue; // Skip to the next level
-                        }
-                    }
-
                     $this->command->line("    - Seeding subjects for level: {$levelName}");
                     
                     foreach ($levelData['subjects'] as $subjectDetails) {
-                        Subject::firstOrCreate(
+                        Subject::updateOrCreate(
                             [
                                 'school_id' => $school->id,
                                 'code' => $subjectDetails['code'],
-                                'curriculum_type' => $curriculum,
-                                'grade_level' => $levelName,
                             ],
                             [
                                 'name' => $subjectDetails['name'],
+                                'curriculum_type' => $curriculum,
+                                'grade_level' => $levelName,
+                                'level' => $levelData['level'],
+                                'pathway' => $levelData['pathway'] ?? null,
                                 'category' => $subjectDetails['category'],
                                 'is_core' => $subjectDetails['is_core'],
-                                'level' => $levelData['level'],
                             ]
                         );
                     }
@@ -150,7 +118,7 @@ class SubjectSeeder extends Seeder
                         ['name' => 'Business Studies', 'code' => 'CBC-G7-BUS', 'category' => 'Technical', 'is_core' => true],
                         ['name' => 'Agriculture', 'code' => 'CBC-G7-AGR', 'category' => 'Technical', 'is_core' => true],
                         ['name' => 'Pre-Technical & Pre-Career Studies', 'code' => 'CBC-G7-TEC', 'category' => 'Technical', 'is_core' => true],
-                        // Optional Subjects (Electives) - Students choose at least 1
+                        // Optional Subjects (Electives)
                         ['name' => 'Visual Arts', 'code' => 'CBC-G7-VIS', 'category' => 'Creative Arts', 'is_core' => false],
                         ['name' => 'Performing Arts', 'code' => 'CBC-G7-PER', 'category' => 'Creative Arts', 'is_core' => false],
                         ['name' => 'Home Science', 'code' => 'CBC-G7-HSC', 'category' => 'Sciences', 'is_core' => false],
@@ -167,7 +135,7 @@ class SubjectSeeder extends Seeder
                     'level' => 'Senior Secondary',
                     'pathway' => 'STEM',
                     'subjects' => [
-                        // Core Subjects (All Pathways)
+                        // Core Subjects
                         ['name' => 'English', 'code' => 'CBC-G10-ENG', 'category' => 'Languages', 'is_core' => true],
                         ['name' => 'Kiswahili', 'code' => 'CBC-G10-KIS', 'category' => 'Languages', 'is_core' => true],
                         ['name' => 'Mathematics', 'code' => 'CBC-G10-MAT', 'category' => 'Mathematics', 'is_core' => true],

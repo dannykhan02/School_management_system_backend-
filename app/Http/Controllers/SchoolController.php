@@ -13,6 +13,9 @@ use Illuminate\Support\Facades\Storage;
 
 class SchoolController extends Controller
 {
+    // Define the Senior Secondary grade levels
+    private $seniorSecondaryGradeLevels = ['Grade 10', 'Grade 11', 'Grade 12'];
+    
     /**
      * Display a listing of the schools.
      */
@@ -26,6 +29,7 @@ class SchoolController extends Controller
             $schoolData = $school->toArray();
             $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
             $schoolData['curriculum_levels'] = $school->curriculum_levels;
+            $schoolData['grade_levels'] = $school->grade_levels;
             return $schoolData;
         });
 
@@ -59,6 +63,8 @@ class SchoolController extends Controller
             'school.has_secondary' => 'sometimes|boolean',
             'school.senior_secondary_pathways' => 'nullable|array',
             'school.senior_secondary_pathways.*' => 'nullable|in:STEM,Arts,Social Sciences',
+            'school.grade_levels' => 'nullable|array', // Changed from required to nullable
+            'school.grade_levels.*' => 'required|string',
             
             'admin.full_name' => 'required|string|max:255',
             'admin.email' => 'required|email|max:255|unique:users,email',
@@ -68,7 +74,8 @@ class SchoolController extends Controller
         ], [
             'school.name.unique' => 'A school with this name already exists.',
             'school.code.unique' => 'This school code is already in use.',
-            'admin.email.unique' => 'This admin email is already registered.'
+            'admin.email.unique' => 'This admin email is already registered.',
+            'school.grade_levels.*.required' => 'Grade level cannot be empty.'
         ]);
 
         DB::beginTransaction();
@@ -80,7 +87,16 @@ class SchoolController extends Controller
                 $logoPath = $request->file('school.logo')->store('logos', 'public');
             }
 
-            // 2️⃣ Create School
+            // 2️⃣ Prepare grade levels
+            $gradeLevels = $data['school']['grade_levels'] ?? [];
+            
+            // Automatically add Senior Secondary grade levels if has_senior_secondary is true
+            if (isset($data['school']['has_senior_secondary']) && $data['school']['has_senior_secondary']) {
+                // Merge with existing grade levels, avoiding duplicates
+                $gradeLevels = array_unique(array_merge($gradeLevels, $this->seniorSecondaryGradeLevels));
+            }
+
+            // 3️⃣ Create School
             $school = School::create([
                 'name' => $data['school']['name'],
                 'address' => $data['school']['address'] ?? null,
@@ -99,12 +115,13 @@ class SchoolController extends Controller
                 'has_senior_secondary' => $data['school']['has_senior_secondary'] ?? false,
                 'has_secondary' => $data['school']['has_secondary'] ?? false,
                 'senior_secondary_pathways' => $data['school']['senior_secondary_pathways'] ?? null,
+                'grade_levels' => $gradeLevels,
             ]);
 
-            // 3️⃣ Get or create admin role
+            // 4️⃣ Get or create admin role
             $adminRole = Role::firstOrCreate(['name' => 'admin']);
 
-            // 4️⃣ Create Admin User
+            // 5️⃣ Create Admin User
             $user = User::create([
                 'school_id' => $school->id,
                 'role_id' => $adminRole->id,
@@ -122,6 +139,7 @@ class SchoolController extends Controller
             $schoolData = $school->toArray();
             $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
             $schoolData['curriculum_levels'] = $school->curriculum_levels;
+            $schoolData['grade_levels'] = $school->grade_levels;
 
             return response()->json([
                 'message' => 'School and admin user created successfully',
@@ -145,6 +163,7 @@ class SchoolController extends Controller
         $schoolData = $school->toArray();
         $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
         $schoolData['curriculum_levels'] = $school->curriculum_levels;
+        $schoolData['grade_levels'] = $school->grade_levels;
 
         return response()->json([
             'message' => 'School fetched successfully',
@@ -170,6 +189,7 @@ class SchoolController extends Controller
         $schoolData = $school->toArray();
         $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
         $schoolData['curriculum_levels'] = $school->curriculum_levels;
+        $schoolData['grade_levels'] = $school->grade_levels;
 
         return response()->json([
             'message' => 'School fetched successfully',
@@ -200,10 +220,13 @@ class SchoolController extends Controller
             'has_senior_secondary' => 'sometimes|boolean',
             'has_secondary' => 'sometimes|boolean',
             'senior_secondary_pathways' => 'nullable|array',
-            'senior_secondary_pathways.*' => 'nullable|in:STEM,Arts,Social Sciences'
+            'senior_secondary_pathways.*' => 'nullable|in:STEM,Arts,Social Sciences',
+            'grade_levels' => 'nullable|array',
+            'grade_levels.*' => 'required|string'
         ], [
             'name.unique' => 'A school with this name already exists.',
             'code.unique' => 'This school code is already in use.',
+            'grade_levels.*.required' => 'Grade level cannot be empty.'
         ]);
 
         // Handle logo update
@@ -217,12 +240,43 @@ class SchoolController extends Controller
             $data['logo'] = $request->file('logo')->store('logos', 'public');
         }
 
+        // =======================================================
+        // FIX: Handle grade_levels correctly
+        // =======================================================
+        
+        // Explicitly get grade_levels from request to ensure it's always processed.
+        // If the frontend doesn't send the key, it defaults to an empty array.
+        $gradeLevels = $request->input('grade_levels', []);
+        
+        // If has_senior_secondary is being set to true, ensure Senior Secondary grade levels are included
+        if (isset($data['has_senior_secondary']) && $data['has_senior_secondary']) {
+            // Merge with existing grade levels, avoiding duplicates
+            $gradeLevels = array_unique(array_merge($gradeLevels, $this->seniorSecondaryGradeLevels));
+        }
+        // If has_senior_secondary is being set to false, remove Senior Secondary grade levels
+        else if (isset($data['has_senior_secondary']) && !$data['has_senior_secondary']) {
+            $gradeLevels = array_diff($gradeLevels, $this->seniorSecondaryGradeLevels);
+        }
+        // If has_senior_secondary is not being updated but was already true, ensure Senior Secondary grade levels are included
+        else if (!isset($data['has_senior_secondary']) && $school->has_senior_secondary) {
+            $gradeLevels = array_unique(array_merge($gradeLevels, $this->seniorSecondaryGradeLevels));
+        }
+        
+        // Always include grade_levels in the data, even if it's an empty array.
+        // This prevents the field from being set to null in the database.
+        $data['grade_levels'] = $gradeLevels;
+        
+        // =======================================================
+        // END OF FIX
+        // =======================================================
+
         $school->update($data);
 
         // Return updated school with full logo URL
         $schoolData = $school->toArray();
         $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
         $schoolData['curriculum_levels'] = $school->curriculum_levels;
+        $schoolData['grade_levels'] = $school->grade_levels;
 
         return response()->json([
             'message' => 'School updated successfully',

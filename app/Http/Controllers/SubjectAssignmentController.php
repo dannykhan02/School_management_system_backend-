@@ -7,16 +7,18 @@ use App\Models\Teacher;
 use App\Models\Subject;
 use App\Models\AcademicYear;
 use App\Models\Stream;
+use App\Models\Classroom;
 use App\Models\School;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log; // Add logging
 
 class SubjectAssignmentController extends Controller
 {
     /**
      * Display a listing of subject assignments.
      * Can be filtered by teacher, subject, academic_year, or stream using query parameters.
-     * Example: /api/subject-assignments?teacher_id=1&academic_year_id=5
+     * Example: /api/?teacher_id=1&academic_year_id=5
      */
     public function index(Request $request)
     {
@@ -34,9 +36,11 @@ class SubjectAssignmentController extends Controller
                                       $query->where('school_id', $user->school_id);
                                   });
 
-        // Add stream relationship only if school has streams
+        // Add appropriate relationships based on stream configuration
         if ($hasStreams) {
             $query->with(['stream.classroom']);
+        } else {
+            $query->with(['classroom']); // Load classroom relationship
         }
 
         // Apply filters if they exist in request
@@ -77,20 +81,23 @@ class SubjectAssignmentController extends Controller
         $school = School::find($user->school_id);
         $hasStreams = $school ? $school->has_streams : false;
 
+        // Log the incoming request for debugging
+        Log::info('SubjectAssignment store request:', $request->all());
+
         // Base validation rules
         $validationRules = [
             'teacher_id' => 'required|exists:teachers,id',
             'subject_id' => 'required|exists:subjects,id',
-            'academic_year_id' => 'required|exists:academic_years,id',  // This is now required
+            'academic_year_id' => 'required|exists:academic_years,id',
             'weekly_periods' => 'nullable|integer|min:1',
             'assignment_type' => 'nullable|in:main_teacher,assistant_teacher,substitute',
         ];
 
-        // Add stream_id validation only for schools with streams
+        // Add appropriate validation based on school type
         if ($hasStreams) {
             $validationRules['stream_id'] = 'required|exists:streams,id';
         } else {
-            $validationRules['stream_id'] = 'nullable|exists:streams,id';
+            $validationRules['classroom_id'] = 'required|exists:classrooms,id'; // Ensure classroom_id is required
         }
 
         $validated = $request->validate($validationRules);
@@ -114,6 +121,14 @@ class SubjectAssignmentController extends Controller
             }
         }
 
+        // For schools without streams, verify classroom belongs to the same school
+        if (!$hasStreams && isset($validated['classroom_id'])) {
+            $classroom = Classroom::findOrFail($validated['classroom_id']);
+            if ($classroom->school_id !== $user->school_id) {
+                return response()->json(['message' => 'The classroom does not belong to your school'], 422);
+            }
+        }
+
         // Check if teacher is qualified for this subject's curriculum
         if ($subject->curriculum_type === 'CBC' && 
             !in_array($teacher->curriculum_specialization, ['CBC', 'Both'])) {
@@ -130,9 +145,11 @@ class SubjectAssignmentController extends Controller
                                               ->where('subject_id', $validated['subject_id'])
                                               ->where('academic_year_id', $validated['academic_year_id']);
 
-        // Add stream_id to duplicate check only for schools with streams
+        // Add appropriate ID to duplicate check
         if ($hasStreams) {
             $existingAssignmentQuery->where('stream_id', $validated['stream_id']);
+        } else {
+            $existingAssignmentQuery->where('classroom_id', $validated['classroom_id']);
         }
 
         $existingAssignment = $existingAssignmentQuery->first();
@@ -141,13 +158,21 @@ class SubjectAssignmentController extends Controller
             return response()->json(['message' => 'This assignment already exists'], 409);
         }
 
+        // Create the assignment with all validated data
         $assignment = SubjectAssignment::create($validated);
+
+        // Load appropriate relationships based on stream configuration
+        if ($hasStreams) {
+            $assignment->load(['teacher.user', 'subject', 'academicYear', 'stream.classroom']);
+        } else {
+            $assignment->load(['teacher.user', 'subject', 'academicYear', 'classroom']); // Load classroom relationship
+        }
 
         return response()->json([
             'status' => 'success',
             'message' => 'Subject assignment created successfully.',
             'has_streams' => $hasStreams,
-            'data' => $assignment->load(['teacher.user', 'subject', 'academicYear', 'stream.classroom'])
+            'data' => $assignment
         ], 201);
     }
 
@@ -171,14 +196,16 @@ class SubjectAssignmentController extends Controller
             'assignments' => 'required|array',
             'assignments.*.teacher_id' => 'required|exists:teachers,id',
             'assignments.*.subject_id' => 'required|exists:subjects,id',
-            'assignments.*.academic_year_id' => 'required|exists:academic_years,id',  // This is now required
+            'assignments.*.academic_year_id' => 'required|exists:academic_years,id',
             'assignments.*.weekly_periods' => 'nullable|integer|min:1',
             'assignments.*.assignment_type' => 'nullable|in:main_teacher,assistant_teacher,substitute',
         ];
 
-        // Add stream_id validation only for schools with streams
+        // Add appropriate validation based on school type
         if ($hasStreams) {
             $validationRules['assignments.*.stream_id'] = 'required|exists:streams,id';
+        } else {
+            $validationRules['assignments.*.classroom_id'] = 'required|exists:classrooms,id';
         }
 
         $validated = $request->validate($validationRules);
@@ -209,6 +236,15 @@ class SubjectAssignmentController extends Controller
                     }
                 }
 
+                // For schools without streams, verify classroom belongs to the same school
+                if (!$hasStreams && isset($assignmentData['classroom_id'])) {
+                    $classroom = Classroom::findOrFail($assignmentData['classroom_id']);
+                    if ($classroom->school_id !== $user->school_id) {
+                        $errors[] = "Assignment #".($index+1).": The classroom does not belong to your school";
+                        continue;
+                    }
+                }
+
                 // Check if teacher is qualified for this subject's curriculum
                 if ($subject->curriculum_type === 'CBC' && 
                     !in_array($teacher->curriculum_specialization, ['CBC', 'Both'])) {
@@ -227,9 +263,11 @@ class SubjectAssignmentController extends Controller
                                                       ->where('subject_id', $assignmentData['subject_id'])
                                                       ->where('academic_year_id', $assignmentData['academic_year_id']);
 
-                // Add stream_id to duplicate check only for schools with streams
+                // Add appropriate ID to duplicate check
                 if ($hasStreams) {
                     $existingAssignmentQuery->where('stream_id', $assignmentData['stream_id']);
+                } else {
+                    $existingAssignmentQuery->where('classroom_id', $assignmentData['classroom_id']);
                 }
 
                 $existingAssignment = $existingAssignmentQuery->first();
@@ -250,6 +288,15 @@ class SubjectAssignmentController extends Controller
                 'message' => 'Some assignments could not be created',
                 'errors' => $errors
             ], 422);
+        }
+
+        // Load appropriate relationships for created assignments
+        foreach ($createdAssignments as $assignment) {
+            if ($hasStreams) {
+                $assignment->load(['teacher.user', 'subject', 'academicYear', 'stream.classroom']);
+            } else {
+                $assignment->load(['teacher.user', 'subject', 'academicYear', 'classroom']);
+            }
         }
 
         return response()->json([
@@ -276,9 +323,11 @@ class SubjectAssignmentController extends Controller
 
         $query = SubjectAssignment::with(['teacher.user', 'subject', 'academicYear']);
         
-        // Add stream relationship only if school has streams
+        // Add appropriate relationships based on stream configuration
         if ($hasStreams) {
             $query->with(['stream.classroom']);
+        } else {
+            $query->with(['classroom']); // Load classroom relationship
         }
         
         $assignment = $query->findOrFail($id);
@@ -320,9 +369,11 @@ class SubjectAssignmentController extends Controller
             'assignment_type' => 'sometimes|required|in:main_teacher,assistant_teacher,substitute',
         ];
 
-        // Add stream_id validation only for schools with streams
+        // Add appropriate validation based on school type
         if ($hasStreams) {
             $validationRules['stream_id'] = 'sometimes|required|exists:streams,id';
+        } else {
+            $validationRules['classroom_id'] = 'sometimes|required|exists:classrooms,id';
         }
 
         $validated = $request->validate($validationRules);
@@ -335,13 +386,28 @@ class SubjectAssignmentController extends Controller
             }
         }
 
+        // For schools without streams, verify classroom belongs to the same school
+        if (!$hasStreams && isset($validated['classroom_id'])) {
+            $classroom = Classroom::findOrFail($validated['classroom_id']);
+            if ($classroom->school_id !== $user->school_id) {
+                return response()->json(['message' => 'The classroom does not belong to your school'], 422);
+            }
+        }
+
         $assignment->update($validated);
+
+        // Load appropriate relationships based on stream configuration
+        if ($hasStreams) {
+            $assignment->load(['teacher.user', 'subject', 'academicYear', 'stream.classroom']);
+        } else {
+            $assignment->load(['teacher.user', 'subject', 'academicYear', 'classroom']); // Load classroom relationship
+        }
 
         return response()->json([
             'status' => 'success',
             'message' => 'Subject assignment updated successfully.',
             'has_streams' => $hasStreams,
-            'data' => $assignment->load(['teacher.user', 'subject', 'academicYear', 'stream.classroom'])
+            'data' => $assignment
         ]);
     }
 

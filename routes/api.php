@@ -58,7 +58,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Academic Years
     Route::apiResource('academic-years', AcademicYearController::class);
-    // Add this route after the existing academic-years resource route
+    // Add this route after existing academic-years resource route
     Route::get('/academic-years/by-curriculum/{curriculum}', [AcademicYearController::class, 'getByCurriculum']);
 
     // ---------------------
@@ -102,16 +102,41 @@ Route::middleware('auth:sanctum')->group(function () {
     // ---------------------
     // SUBJECT ASSIGNMENT ROUTES
     // ---------------------
+    // IMPORTANT: Batch route MUST come BEFORE apiResource to avoid route conflict
+    Route::post('/subject-assignments/batch', [SubjectAssignmentController::class, 'storeBatch']);
+    
     // Regular subject assignment routes
     Route::apiResource('subject-assignments', SubjectAssignmentController::class);
-    
-    // NEW: Batch assignment route for creating multiple assignments at once
-    Route::post('/subject-assignments/batch', [SubjectAssignmentController::class, 'storeBatch']);
 
     // ---------------------
     // SUBJECT ROUTES
     // ---------------------
+    // NEW: Get constants for curriculum types, grade levels, pathways, and categories
+    Route::get('/subjects/constants', [SubjectController::class, 'getConstants']);
+    
+    // NEW: Search for subjects by name (for autofilling)
+    Route::get('/subjects/search', [SubjectController::class, 'searchSubjectByName']);
+    
+    // Standard CRUD operations
     Route::apiResource('subjects', SubjectController::class);
+    
+    // NEW: Get subjects by curriculum and level
+    Route::get('/subjects/curriculum/{curriculum}/level/{level}', [SubjectController::class, 'getByCurriculumAndLevel']);
+    
+    // NEW: Get subjects by school level with optional filters
+    Route::get('/subjects/by-school-level', [SubjectController::class, 'getBySchoolLevel']);
+    
+    // NEW: Get subject streams
+    Route::get('/subjects/{subjectId}/streams', [SubjectController::class, 'getStreams']);
+    
+    // NEW: Assign subject to streams
+    Route::post('/subjects/{subjectId}/streams', [SubjectController::class, 'assignToStreams']);
+    
+    // NEW: Get subject teachers
+    Route::get('/subjects/{subjectId}/teachers', [SubjectController::class, 'getTeachers']);
+    
+    // NEW: Assign teachers to subject
+    Route::post('/subjects/{subjectId}/teachers', [SubjectController::class, 'assignTeachers']);
 
     // ---------------------
     // TEACHER ROUTES
@@ -121,6 +146,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/teachers/class-teachers', [TeacherController::class, 'getAllClassTeachers']);
     Route::get('/teachers/school/{schoolId}', [TeacherController::class, 'getTeachersBySchool']);
     Route::get('/teachers/stream/{streamId}', [TeacherController::class, 'getTeachersByStream']);
+    
+    // NEW: Get teachers with their teaching assignments (classrooms or streams)
+    Route::get('/teachers/with-assignments', [TeacherController::class, 'getTeachersWithAssignments']);
     
     // Routes for schools without streams
     Route::get('/teachers/{teacherId}/classrooms', [TeacherController::class, 'getClassrooms']);
@@ -149,6 +177,6 @@ Route::middleware('auth:sanctum')->group(function () {
     // ---------------------
     Route::apiResource('students', StudentController::class);
     Route::get('get-students', [StudentController::class, 'getStudents']);
-    Route::get('class-students/{classId}', [StudentController::class, 'getClassStudents']);
+    Route::get('class-studegints/{classId}', [StudentController::class, 'getClassStudents']);
     Route::get('get-parents', [StudentController::class, 'getParentsForMySchool']);
 });
