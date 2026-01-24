@@ -51,10 +51,28 @@ Route::middleware('auth:sanctum')->group(function () {
     // ---------------------
     // SCHOOL MANAGEMENT
     // ---------------------
+    // ⚠️ IMPORTANT: Specific routes MUST come BEFORE generic routes
+    
+    // Get school statistics (system-wide) - MUST be before {school}
+    Route::get('/schools/statistics', [SchoolController::class, 'statistics']);
+    
+    // Get available cities for filters - MUST be before {school}
+    Route::get('/schools/cities', [SchoolController::class, 'getCities']);
+    
+    // Get all schools (paginated with filters) - MUST be before {school}
     Route::get('/schools/all', [SchoolController::class, 'index']);
-    Route::get('/schools', [SchoolController::class, 'mySchool']);
-    Route::put('/schools/{school}', [SchoolController::class, 'update']);
+    
+    // Get specific school details
     Route::get('/schools/{school}', [SchoolController::class, 'show']);
+    
+    // Get detailed user breakdown for specific school
+    Route::get('/schools/{school}/user-breakdown', [SchoolController::class, 'getUserBreakdown']);
+    
+    // Update school
+    Route::put('/schools/{school}', [SchoolController::class, 'update']);
+    
+    // User's own school (for school admin) - Changed from /schools to /my-school to avoid conflicts
+    Route::get('/my-school', [SchoolController::class, 'mySchool']);
 
     // Academic Years
     Route::apiResource('academic-years', AcademicYearController::class);
