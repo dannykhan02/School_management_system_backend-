@@ -1,56 +1,45 @@
-<?php
+// Configuration
+$email = 'superadmin@schoolsystem.local';  // Change this to your email
+$password = 'SecureP@ssw0rd2024!Admin';     // Change this to your password
 
-namespace App\Http\Controllers;
+// Find user
+$user = App\Models\User::where('email', $email)->first();
 
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Log;
-
-class LoginController extends Controller
-{
-    /**
-     * Handle login and return token.
-     */
-    public function login(Request $request)
-    {
-        $request->validate([
-            'email'    => 'required|email',
-            'password' => 'required',
-        ]);
-
-        if (!Auth::attempt($request->only('email', 'password'))) {
-            Log::warning("FAILED LOGIN ATTEMPT", [
-                'email' => $request->email,
-                'ip'    => $request->ip()
-            ]);
-
-            return response()->json(['message' => 'Invalid credentials'], 401);
-        }
-
-        $user = Auth::user();
-
-        // Create token
-        $token = $user->createToken('postman-login')->plainTextToken;
-
-        // LOG THE SUCCESSFUL LOGIN
-        Log::info("USER LOGGED IN", [
-            'user_id'  => $user->id,
-            'email'    => $user->email,
-            'name'     => $user->name ?? null,
-            'role'     => $user->role ?? 'undefined',
-            'token'    => $token,
-            'ip'       => $request->ip(),
-            'userAgent'=> $request->header('User-Agent'),
-        ]);
-
-        return response()->json([
-            'message' => 'Login successful',
-            'user'    => [
-                'id'    => $user->id,
-                'email' => $user->email,
-                'name'  => $user->name ?? null,
-            ],
-            'token' => $token,
-        ], 200);
-    }
+if (!$user) {
+    echo "❌ User not found with email: {$email}\n";
+    exit;
 }
+
+// Verify password
+if (!Hash::check($password, $user->password)) {
+    echo "❌ Invalid password\n";
+    exit;
+}
+
+// Create token
+$token = $user->createToken('tinker-login-' . now()->format('Y-m-d-H-i-s'))->plainTextToken;
+
+// Display results
+echo "\n✅ Login Successful!\n";
+echo "==========================================\n";
+echo "Token: {$token}\n";
+echo "==========================================\n";
+echo "User Details:\n";
+echo "  ID: {$user->id}\n";
+echo "  Name: {$user->full_name}\n";
+echo "  Email: {$user->email}\n";
+echo "  Phone: {$user->phone}\n";
+echo "  Status: {$user->status}\n";
+
+if ($user->role) {
+    echo "  Role: {$user->role->name}\n";
+}
+
+if ($user->school) {
+    echo "  School: {$user->school->name}\n";
+    echo "  School ID: {$user->school->id}\n";
+}
+
+echo "==========================================\n";
+echo "\nUse this token in your API requests:\n";
+echo "Authorization: Bearer {$token}\n";

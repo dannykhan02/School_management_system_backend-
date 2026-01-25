@@ -44,6 +44,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/auth/logout', [AuthController::class, 'logout']);
     Route::get('/auth/user', [AuthController::class, 'user']);
     Route::post('/user/change-password', [AuthController::class, 'changePassword']);
+    
+    // User's own profile update (must come before apiResource)
+    Route::put('/user/profile', [UserController::class, 'updateProfile']);
+    Route::patch('/user/profile', [UserController::class, 'updateProfile']);
+    
+    // Super admins route - placed before apiResource to avoid conflict
+    Route::get('/users/super-admins', [UserController::class, 'getSuperAdmins']);
 
     Route::apiResource('users', UserController::class);
     Route::apiResource('roles', RoleController::class);
@@ -51,32 +58,31 @@ Route::middleware('auth:sanctum')->group(function () {
     // ---------------------
     // SCHOOL MANAGEMENT
     // ---------------------
-    // ⚠️ IMPORTANT: Specific routes MUST come BEFORE generic routes
+    // ⚠️ CRITICAL: Order matters! Specific routes MUST come BEFORE {school} parameter routes
     
-    // Get school statistics (system-wide) - MUST be before {school}
+    // 1. Get school statistics (system-wide)
     Route::get('/schools/statistics', [SchoolController::class, 'statistics']);
     
-    // Get available cities for filters - MUST be before {school}
+    // 2. Get available cities for filters
     Route::get('/schools/cities', [SchoolController::class, 'getCities']);
     
-    // Get all schools (paginated with filters) - MUST be before {school}
+    // 3. Get all schools (paginated with filters) - RENAMED to avoid conflict
     Route::get('/schools/all', [SchoolController::class, 'index']);
     
-    // Get specific school details
+    // 4. User's own school (for authenticated user)
+    Route::get('/schools/my-school', [SchoolController::class, 'mySchool']);
+    
+    // 5. Get specific school details (MUST be after specific routes)
     Route::get('/schools/{school}', [SchoolController::class, 'show']);
     
-    // Get detailed user breakdown for specific school
+    // 6. Get detailed user breakdown for specific school
     Route::get('/schools/{school}/user-breakdown', [SchoolController::class, 'getUserBreakdown']);
     
-    // Update school
+    // 7. Update school
     Route::put('/schools/{school}', [SchoolController::class, 'update']);
-    
-    // User's own school (for school admin) - Changed from /schools to /my-school to avoid conflicts
-    Route::get('/my-school', [SchoolController::class, 'mySchool']);
 
     // Academic Years
     Route::apiResource('academic-years', AcademicYearController::class);
-    // Add this route after existing academic-years resource route
     Route::get('/academic-years/by-curriculum/{curriculum}', [AcademicYearController::class, 'getByCurriculum']);
 
     // ---------------------
@@ -94,100 +100,63 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/classrooms/{classroomId}/class-teacher', [ClassroomController::class, 'assignClassTeacher']);
     Route::delete('/classrooms/{classroomId}/class-teacher', [ClassroomController::class, 'removeClassTeacher']);
     
-    // NEW: Assign a teacher to multiple classrooms
     Route::post('/teachers/assign-to-multiple-classrooms', [ClassroomController::class, 'assignToMultipleClassrooms']);
-    
-    // NEW: Get available classrooms for a teacher based on max_classes limit
     Route::get('/teachers/{teacherId}/available-classrooms', [ClassroomController::class, 'getAvailableClassroomsForTeacher']);
 
     // ---------------------
     // STREAM ROUTES
     // ---------------------
-    // IMPORTANT: Specific routes must come BEFORE apiResource
     Route::get('/streams/class-teachers', [StreamController::class, 'getAllClassTeachers']);
     Route::get('/streams/classroom/{classroomId}', [StreamController::class, 'getStreamsByClassroom']);
     Route::get('/streams/{streamId}/teachers', [StreamController::class, 'getStreamTeachers']);
     Route::post('/streams/{streamId}/assign-class-teacher', [StreamController::class, 'assignClassTeacher']);
     Route::delete('/streams/{streamId}/remove-class-teacher', [StreamController::class, 'removeClassTeacher']);
     Route::post('/streams/{streamId}/assign-teachers', [StreamController::class, 'assignTeachers']);
-    
-    // NEW: Assign a teacher to multiple streams
     Route::post('/teachers/assign-to-multiple-streams', [StreamController::class, 'assignToMultipleStreams']);
     
-    // apiResource MUST come AFTER specific routes
     Route::apiResource('streams', StreamController::class);
 
     // ---------------------
     // SUBJECT ASSIGNMENT ROUTES
     // ---------------------
-    // IMPORTANT: Batch route MUST come BEFORE apiResource to avoid route conflict
     Route::post('/subject-assignments/batch', [SubjectAssignmentController::class, 'storeBatch']);
-    
-    // Regular subject assignment routes
     Route::apiResource('subject-assignments', SubjectAssignmentController::class);
 
     // ---------------------
     // SUBJECT ROUTES
     // ---------------------
-    // NEW: Get constants for curriculum types, grade levels, pathways, and categories
     Route::get('/subjects/constants', [SubjectController::class, 'getConstants']);
-    
-    // NEW: Search for subjects by name (for autofilling)
     Route::get('/subjects/search', [SubjectController::class, 'searchSubjectByName']);
-    
-    // Standard CRUD operations
     Route::apiResource('subjects', SubjectController::class);
-    
-    // NEW: Get subjects by curriculum and level
     Route::get('/subjects/curriculum/{curriculum}/level/{level}', [SubjectController::class, 'getByCurriculumAndLevel']);
-    
-    // NEW: Get subjects by school level with optional filters
     Route::get('/subjects/by-school-level', [SubjectController::class, 'getBySchoolLevel']);
-    
-    // NEW: Get subject streams
     Route::get('/subjects/{subjectId}/streams', [SubjectController::class, 'getStreams']);
-    
-    // NEW: Assign subject to streams
     Route::post('/subjects/{subjectId}/streams', [SubjectController::class, 'assignToStreams']);
-    
-    // NEW: Get subject teachers
     Route::get('/subjects/{subjectId}/teachers', [SubjectController::class, 'getTeachers']);
-    
-    // NEW: Assign teachers to subject
     Route::post('/subjects/{subjectId}/teachers', [SubjectController::class, 'assignTeachers']);
 
     // ---------------------
     // TEACHER ROUTES
     // ---------------------
-    // Custom routes for teacher-specific operations
     Route::get('teachers/{teacherId}/assignments', [TeacherController::class, 'getAssignments']);
     Route::get('/teachers/class-teachers', [TeacherController::class, 'getAllClassTeachers']);
     Route::get('/teachers/school/{schoolId}', [TeacherController::class, 'getTeachersBySchool']);
     Route::get('/teachers/stream/{streamId}', [TeacherController::class, 'getTeachersByStream']);
-    
-    // NEW: Get teachers with their teaching assignments (classrooms or streams)
     Route::get('/teachers/with-assignments', [TeacherController::class, 'getTeachersWithAssignments']);
-    
-    // Routes for schools without streams
     Route::get('/teachers/{teacherId}/classrooms', [TeacherController::class, 'getClassrooms']);
     Route::post('/teachers/{teacherId}/classrooms', [TeacherController::class, 'assignToClassroom']);
     Route::delete('/teachers/{teacherId}/classrooms/{classroomId}', [TeacherController::class, 'removeFromClassroom']);
-    
-    // Routes for schools with streams
     Route::get('/teachers/{teacherId}/streams-as-class-teacher', [TeacherController::class, 'getStreamsAsClassTeacher']);
     Route::get('/teachers/{teacherId}/streams-as-teacher', [TeacherController::class, 'getStreamsAsTeacher']);
 
-    // apiResource LAST
     Route::apiResource('teachers', TeacherController::class);
 
     // ---------------------
-    // PARENT ROUTES (NEW)
+    // PARENT ROUTES
     // ---------------------
-    // Custom routes for parent-specific operations
     Route::get('parents/{parentId}/students', [ParentController::class, 'getStudents']);
     Route::get('/parents/school/{schoolId}', [ParentController::class, 'getParentsBySchool']);
 
-    // apiResource LAST
     Route::apiResource('parents', ParentController::class);
 
     // ---------------------
