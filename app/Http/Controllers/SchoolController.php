@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 
 class SchoolController extends Controller
 {
@@ -18,20 +19,6 @@ class SchoolController extends Controller
     
     /**
      * Display a paginated listing of schools with filters and optional user statistics.
-     * 
-     * Query Parameters:
-     * - per_page: Number of records per page (default: 15, max: 100)
-     * - page: Page number
-     * - search: Search term for school name, code, city, or email
-     * - school_type: Filter by school type (Primary, Secondary, Mixed)
-     * - curriculum: Filter by curriculum (CBC, 8-4-4, Both)
-     * - city: Filter by city
-     * - has_streams: Filter by stream availability (true/false)
-     * - sort_by: Field to sort by (name, created_at, city, etc.)
-     * - sort_order: Sort direction (asc, desc)
-     * - include_users: Include user statistics (true/false) - default: false
-     * - include_students: Include student count (true/false) - default: false
-     * - include_teachers: Include teacher count (true/false) - default: false
      */
     public function index(Request $request)
     {
@@ -191,7 +178,6 @@ class SchoolController extends Controller
 
     /**
      * Get aggregated statistics for all schools.
-     * This is a separate endpoint to avoid loading heavy data unnecessarily.
      */
     public function statistics()
     {
@@ -223,7 +209,6 @@ class SchoolController extends Controller
 
     /**
      * Get detailed user breakdown for a specific school.
-     * This prevents loading all users for all schools at once.
      */
     public function getUserBreakdown(School $school)
     {
@@ -437,17 +422,130 @@ class SchoolController extends Controller
 
     /**
      * Update the specified school in storage.
+     * For school admins: Only allow updates to non-locked fields
+     * For super admins: Allow updates to all fields
      */
     public function update(Request $request, School $school)
     {
-        $data = $request->validate([
+        $user = Auth::user();
+        $isSuperAdmin = $user->role->name === 'super_admin';
+
+        // Base validation rules - INCLUDING BOOLEAN FIELDS FOR ALL USERS
+        $validationRules = [
             'name' => 'sometimes|required|string|max:255|unique:schools,name,' . $school->id,
             'address' => 'nullable|string|max:500',
-            'school_type' => 'nullable|in:Primary,Secondary,Mixed',
             'city' => 'nullable|string|max:100',
-            'code' => 'nullable|string|max:50|unique:schools,code,' . $school->id,
             'phone' => 'nullable|string|max:20',
             'email' => 'nullable|email|max:255',
+            'logo' => 'nullable|file|mimes:jpg,jpeg,png|max:5120',
+            // ⭐ Boolean fields available for ALL authenticated users
+            'has_streams' => 'sometimes|boolean',
+            'has_pre_primary' => 'sometimes|boolean',
+            'has_primary' => 'sometimes|boolean',
+            'has_junior_secondary' => 'sometimes|boolean',
+            'has_senior_secondary' => 'sometimes|boolean',
+            'has_secondary' => 'sometimes|boolean',
+            'senior_secondary_pathways' => 'nullable|array',
+            'senior_secondary_pathways.*' => 'nullable|in:STEM,Arts,Social Sciences',
+            'grade_levels' => 'nullable|array',
+            'grade_levels.*' => 'required|string'
+        ];
+
+        // Only super admins can update locked fields
+        if ($isSuperAdmin) {
+            $validationRules = array_merge($validationRules, [
+                'school_type' => 'sometimes|required|in:Primary,Secondary,Mixed',
+                'code' => 'sometimes|required|string|max:50|unique:schools,code,' . $school->id,
+                'primary_curriculum' => 'sometimes|required|in:CBC,8-4-4,Both',
+                'secondary_curriculum' => 'nullable|in:CBC,8-4-4,Both',
+            ]);
+        } else {
+            // School admins can only update code if it hasn't been set yet
+            if (!$school->code) {
+                $validationRules['code'] = 'sometimes|required|string|max:50|unique:schools,code,' . $school->id;
+            }
+        }
+
+        $data = $request->validate($validationRules, [
+            'name.unique' => 'A school with this name already exists.',
+            'code.unique' => 'This school code is already in use.',
+            'grade_levels.*.required' => 'Grade level cannot be empty.'
+        ]);
+
+        // Handle logo update
+        if ($request->hasFile('logo')) {
+            // Delete old logo if it exists
+            if ($school->logo && Storage::disk('public')->exists($school->logo)) {
+                Storage::disk('public')->delete($school->logo);
+            }
+
+            // Store new logo
+            $data['logo'] = $request->file('logo')->store('logos', 'public');
+        }
+
+        // Handle grade_levels correctly
+        if (isset($data['grade_levels'])) {
+            $gradeLevels = $data['grade_levels'];
+            
+            // If has_senior_secondary is being set to true, ensure Senior Secondary grade levels are included
+            if (isset($data['has_senior_secondary']) && $data['has_senior_secondary']) {
+                $gradeLevels = array_unique(array_merge($gradeLevels, $this->seniorSecondaryGradeLevels));
+            }
+            // If has_senior_secondary is being set to false, remove Senior Secondary grade levels
+            else if (isset($data['has_senior_secondary']) && !$data['has_senior_secondary']) {
+                $gradeLevels = array_diff($gradeLevels, $this->seniorSecondaryGradeLevels);
+            }
+            // If has_senior_secondary is not being updated but was already true, ensure Senior Secondary grade levels are included
+            else if (!isset($data['has_senior_secondary']) && $school->has_senior_secondary) {
+                $gradeLevels = array_unique(array_merge($gradeLevels, $this->seniorSecondaryGradeLevels));
+            }
+            
+            $data['grade_levels'] = $gradeLevels;
+        }
+
+        // Validate curriculum consistency for super admin updates
+        if ($isSuperAdmin && isset($data['school_type'])) {
+            $this->validateCurriculumConsistency($data, $school);
+        }
+
+        // Update the school
+        $school->update($data);
+
+        // Return updated school with full logo URL
+        $schoolData = $school->toArray();
+        $schoolData['logo'] = $school->logo ? asset('storage/' . $school->logo) : null;
+        $schoolData['curriculum_levels'] = $school->curriculum_levels;
+        $schoolData['grade_levels'] = $school->grade_levels;
+
+        return response()->json([
+            'message' => 'School updated successfully',
+            'data' => $schoolData,
+            'updated_by_super_admin' => $isSuperAdmin
+        ], 200);
+    }
+
+    /**
+     * Update school by super admin - allows editing all fields including locked ones
+     * This is an alternative endpoint specifically for super admin updates
+     */
+    public function updateBySuperAdmin(Request $request, School $school)
+    {
+        $user = Auth::user();
+        
+        if ($user->role->name !== 'super_admin') {
+            return response()->json([
+                'error' => 'Unauthorized. Only super admins can use this endpoint.'
+            ], 403);
+        }
+
+        $data = $request->validate([
+            'name' => 'sometimes|required|string|max:255|unique:schools,name,' . $school->id,
+            'school_type' => 'sometimes|required|in:Primary,Secondary,Mixed',
+            'address' => 'nullable|string|max:500',
+            'city' => 'nullable|string|max:100',
+            'phone' => 'nullable|string|max:20',
+            'email' => 'nullable|email|max:255',
+            'code' => 'sometimes|required|string|max:50|unique:schools,code,' . $school->id,
             'logo' => 'nullable|file|mimes:jpg,jpeg,png|max:5120',
             'primary_curriculum' => 'sometimes|required|in:CBC,8-4-4,Both',
             'secondary_curriculum' => 'nullable|in:CBC,8-4-4,Both',
@@ -467,6 +565,9 @@ class SchoolController extends Controller
             'grade_levels.*.required' => 'Grade level cannot be empty.'
         ]);
 
+        // Validate curriculum consistency
+        $this->validateCurriculumConsistency($data, $school);
+
         // Handle logo update
         if ($request->hasFile('logo')) {
             // Delete old logo if it exists
@@ -479,22 +580,24 @@ class SchoolController extends Controller
         }
 
         // Handle grade_levels correctly
-        $gradeLevels = $request->input('grade_levels', []);
-        
-        // If has_senior_secondary is being set to true, ensure Senior Secondary grade levels are included
-        if (isset($data['has_senior_secondary']) && $data['has_senior_secondary']) {
-            $gradeLevels = array_unique(array_merge($gradeLevels, $this->seniorSecondaryGradeLevels));
+        if (isset($data['grade_levels'])) {
+            $gradeLevels = $data['grade_levels'];
+            
+            // If has_senior_secondary is being set to true, ensure Senior Secondary grade levels are included
+            if (isset($data['has_senior_secondary']) && $data['has_senior_secondary']) {
+                $gradeLevels = array_unique(array_merge($gradeLevels, $this->seniorSecondaryGradeLevels));
+            }
+            // If has_senior_secondary is being set to false, remove Senior Secondary grade levels
+            else if (isset($data['has_senior_secondary']) && !$data['has_senior_secondary']) {
+                $gradeLevels = array_diff($gradeLevels, $this->seniorSecondaryGradeLevels);
+            }
+            // If has_senior_secondary is not being updated but was already true, ensure Senior Secondary grade levels are included
+            else if (!isset($data['has_senior_secondary']) && $school->has_senior_secondary) {
+                $gradeLevels = array_unique(array_merge($gradeLevels, $this->seniorSecondaryGradeLevels));
+            }
+            
+            $data['grade_levels'] = $gradeLevels;
         }
-        // If has_senior_secondary is being set to false, remove Senior Secondary grade levels
-        else if (isset($data['has_senior_secondary']) && !$data['has_senior_secondary']) {
-            $gradeLevels = array_diff($gradeLevels, $this->seniorSecondaryGradeLevels);
-        }
-        // If has_senior_secondary is not being updated but was already true, ensure Senior Secondary grade levels are included
-        else if (!isset($data['has_senior_secondary']) && $school->has_senior_secondary) {
-            $gradeLevels = array_unique(array_merge($gradeLevels, $this->seniorSecondaryGradeLevels));
-        }
-        
-        $data['grade_levels'] = $gradeLevels;
 
         $school->update($data);
 
@@ -505,8 +608,83 @@ class SchoolController extends Controller
         $schoolData['grade_levels'] = $school->grade_levels;
 
         return response()->json([
-            'message' => 'School updated successfully',
+            'message' => 'School updated successfully by super admin',
             'data' => $schoolData
+        ], 200);
+    }
+
+    /**
+     * Validate curriculum consistency when updating school structure
+     */
+    private function validateCurriculumConsistency(array $data, School $school)
+    {
+        $schoolType = $data['school_type'] ?? $school->school_type;
+        $primaryCurriculum = $data['primary_curriculum'] ?? $school->primary_curriculum;
+        $secondaryCurriculum = $data['secondary_curriculum'] ?? $school->secondary_curriculum;
+
+        // Validate based on school type
+        if ($schoolType === 'Primary') {
+            if ($primaryCurriculum !== 'CBC') {
+                throw ValidationException::withMessages([
+                    'primary_curriculum' => 'Primary schools must use CBC curriculum'
+                ]);
+            }
+            if (!empty($secondaryCurriculum)) {
+                throw ValidationException::withMessages([
+                    'secondary_curriculum' => 'Primary schools cannot have secondary curriculum'
+                ]);
+            }
+        } elseif ($schoolType === 'Secondary') {
+            if (!empty($primaryCurriculum)) {
+                throw ValidationException::withMessages([
+                    'primary_curriculum' => 'Secondary schools cannot have primary curriculum'
+                ]);
+            }
+        } elseif ($schoolType === 'Mixed') {
+            if ($primaryCurriculum !== 'CBC') {
+                throw ValidationException::withMessages([
+                    'primary_curriculum' => 'Mixed schools primary curriculum must be CBC'
+                ]);
+            }
+        }
+    }
+
+    /**
+     * Get schools with minimal data for dropdown/select options
+     */
+    public function getSchoolsForSelect()
+    {
+        $schools = School::select('id', 'name', 'code', 'city')
+            ->orderBy('name')
+            ->get();
+
+        return response()->json([
+            'message' => 'Schools fetched successfully',
+            'data' => $schools
+        ], 200);
+    }
+
+    /**
+     * Check if a school code is available
+     */
+    public function checkCodeAvailability(Request $request)
+    {
+        $request->validate([
+            'code' => 'required|string|max:50',
+            'school_id' => 'nullable|exists:schools,id'
+        ]);
+
+        $query = School::where('code', $request->code);
+        
+        if ($request->school_id) {
+            $query->where('id', '!=', $request->school_id);
+        }
+
+        $exists = $query->exists();
+
+        return response()->json([
+            'available' => !$exists,
+            'message' => $exists ? 'School code is already taken' : 'School code is available'
         ], 200);
     }
 }

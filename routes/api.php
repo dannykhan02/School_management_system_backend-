@@ -25,6 +25,9 @@ Route::post('/auth/login', [AuthController::class, 'login']);
 // Public school registration
 Route::post('/schools', [SchoolController::class, 'store']);
 
+// Public school code availability check (for registration form)
+Route::get('/schools/check-code-availability', [SchoolController::class, 'checkCodeAvailability']);
+
 // For debugging - can be removed in production
 Route::get('/test', function() {
     return response()->json([
@@ -69,17 +72,30 @@ Route::middleware('auth:sanctum')->group(function () {
     // 3. Get all schools (paginated with filters) - RENAMED to avoid conflict
     Route::get('/schools/all', [SchoolController::class, 'index']);
     
-    // 4. User's own school (for authenticated user)
+    // 4. Get schools for select dropdown (minimal data)
+    Route::get('/schools/select-options', [SchoolController::class, 'getSchoolsForSelect']);
+    
+    // 5. School code availability check (authenticated version)
+    Route::get('/schools/check-code-availability-auth', [SchoolController::class, 'checkCodeAvailability']);
+    
+    // 6. User's own school (for authenticated user)
     Route::get('/schools/my-school', [SchoolController::class, 'mySchool']);
     
-    // 5. Get specific school details (MUST be after specific routes)
+    // 7. Get specific school details (MUST be after specific routes)
     Route::get('/schools/{school}', [SchoolController::class, 'show']);
     
-    // 6. Get detailed user breakdown for specific school
+    // 8. Get detailed user breakdown for specific school
     Route::get('/schools/{school}/user-breakdown', [SchoolController::class, 'getUserBreakdown']);
     
-    // 7. Update school
+    // 9. Update school (standard update - respects role permissions)
     Route::put('/schools/{school}', [SchoolController::class, 'update']);
+    // 9b. POST route for method spoofing (handles FormData with _method field)
+    Route::post('/schools/{school}', [SchoolController::class, 'update']);
+    
+    // 10. Super admin school update (allows editing locked fields)
+    Route::put('/schools/{school}/super-admin-update', [SchoolController::class, 'updateBySuperAdmin']);
+    // 10b. POST route for super admin method spoofing
+    Route::post('/schools/{school}/super-admin-update', [SchoolController::class, 'updateBySuperAdmin']);
 
     // Academic Years
     Route::apiResource('academic-years', AcademicYearController::class);
