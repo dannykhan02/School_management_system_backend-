@@ -1,6 +1,6 @@
 // Configuration
-$email = 'superadmin@schoolsystem.local';  // Change this to your email
-$password = 'SecureP@ssw0rd2024!Admin';     // Change this to your password
+$email = 'admin123@gmail.com';  // Change this to your email
+$password = 'password123';     // Change this to your password
 
 // Find user
 $user = App\Models\User::where('email', $email)->first();

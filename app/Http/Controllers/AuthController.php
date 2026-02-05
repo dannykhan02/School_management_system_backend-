@@ -7,9 +7,17 @@ use Illuminate\Support\Facades\Auth;
 use App\Models\User;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
+use App\Services\RedisTokenService;
 
 class AuthController extends BaseController
 {
+    protected $tokenService;
+
+    public function __construct(RedisTokenService $tokenService)
+    {
+        $this->tokenService = $tokenService;
+    }
+
     public function login(Request $request)
     {
         $request->validate([
@@ -37,8 +45,16 @@ class AuthController extends BaseController
             ], 403);
         }
 
-        // Create token
-        $token = $user->createToken('api-token')->plainTextToken;
+        // Generate Redis token with metadata
+        $token = $this->tokenService->generateToken($user->id, [
+            'role_id' => $user->role_id,
+            'role' => optional($user->role)->name,
+            'school_id' => $user->school_id,
+            'login_method' => $fieldType,
+        ]);
+
+        // Count active sessions
+        $activeSessions = $this->tokenService->countUserSessions($user->id);
 
         // Return user info + token
         return response()->json([
@@ -56,20 +72,15 @@ class AuthController extends BaseController
             'email_verified_at' => $user->email_verified_at,
             'must_change_password' => $user->must_change_password ?? false,
             'token' => $token,
+            'active_sessions' => $activeSessions,
+            'token_expires_in' => config('auth.token_ttl', 3600), // seconds
         ]);
     }
 
     public function changePassword(Request $request)
     {
-        // Get user via Auth (when protected by middleware)
-        $user = Auth::user();
-        
-        // Fallback: Try Sanctum guard
-        if (!$user) {
-            $user = Auth::guard('sanctum')->user();
-        }
+        $user = $request->auth_user ?? auth()->user();
 
-        // If still no user, return error
         if (!$user) {
             return response()->json([
                 'message' => 'Unauthenticated. Please log in.'
@@ -95,14 +106,14 @@ class AuthController extends BaseController
             ], 403);
         }
 
-        // Prevent reuse of recent passwords (optional security best practice)
-        // You can store old passwords and check them here
-
         // Update password
         $user->password = Hash::make($request->new_password);
         $user->must_change_password = false;
         $user->last_password_changed_at = now();
         $user->save();
+
+        // Optionally: Revoke all tokens to force re-login
+        // $this->tokenService->revokeAllUserTokens($user->id);
 
         return response()->json([
             'message' => 'Password changed successfully.'
@@ -111,38 +122,25 @@ class AuthController extends BaseController
 
     public function logout(Request $request)
     {
-        // Get the authenticated user
-        $user = $request->user();
+        $token = $request->bearerToken();
         
-        // If no user from request, try Auth guard
-        if (!$user) {
-            $user = Auth::guard('sanctum')->user();
-        }
-
-        // If still no user, just return success (already logged out)
-        if (!$user) {
+        if (!$token) {
             return response()->json([
-                'message' => 'Already logged out or not authenticated.'
+                'message' => 'No active session found.'
             ], 200);
         }
 
-        // Delete all tokens for this user
-        $user->tokens()->delete();
+        // Revoke the current token
+        $this->tokenService->revokeToken($token);
         
         return response()->json([
             'message' => 'Logged out successfully.'
         ]);
     }
 
-    public function user(Request $request)
+    public function logoutAll(Request $request)
     {
-        // Get the authenticated user
-        $user = $request->user();
-        
-        // Fallback to Sanctum guard
-        if (!$user) {
-            $user = Auth::guard('sanctum')->user();
-        }
+        $user = $request->auth_user ?? auth()->user();
 
         if (!$user) {
             return response()->json([
@@ -150,7 +148,28 @@ class AuthController extends BaseController
             ], 401);
         }
 
-        // Return user with role information
+        // Revoke all tokens for this user
+        $this->tokenService->revokeAllUserTokens($user->id);
+        
+        return response()->json([
+            'message' => 'Logged out from all devices successfully.'
+        ]);
+    }
+
+    public function user(Request $request)
+    {
+        $user = $request->auth_user ?? auth()->user();
+
+        if (!$user) {
+            return response()->json([
+                'message' => 'Unauthenticated.'
+            ], 401);
+        }
+
+        // Get token data
+        $tokenData = $request->token_data ?? [];
+        $activeSessions = $this->tokenService->countUserSessions($user->id);
+
         return response()->json([
             'id' => $user->id,
             'school_id' => $user->school_id,
@@ -165,6 +184,44 @@ class AuthController extends BaseController
             'status' => $user->status,
             'email_verified_at' => $user->email_verified_at,
             'must_change_password' => $user->must_change_password ?? false,
+            'active_sessions' => $activeSessions,
+            'current_session' => [
+                'ip_address' => $tokenData['ip_address'] ?? null,
+                'user_agent' => $tokenData['user_agent'] ?? null,
+                'created_at' => $tokenData['created_at'] ?? null,
+            ]
+        ]);
+    }
+
+    public function activeSessions(Request $request)
+    {
+        $user = $request->auth_user ?? auth()->user();
+
+        if (!$user) {
+            return response()->json([
+                'message' => 'Unauthenticated.'
+            ], 401);
+        }
+
+        $tokens = $this->tokenService->getUserTokens($user->id);
+        $sessions = [];
+
+        foreach ($tokens as $token) {
+            $tokenData = $this->tokenService->validateToken($token);
+            if ($tokenData) {
+                $sessions[] = [
+                    'token_preview' => substr($token, 0, 10) . '...',
+                    'ip_address' => $tokenData['ip_address'] ?? null,
+                    'user_agent' => $tokenData['user_agent'] ?? null,
+                    'created_at' => $tokenData['created_at'] ?? null,
+                    'is_current' => $token === $request->bearerToken(),
+                ];
+            }
+        }
+
+        return response()->json([
+            'total_sessions' => count($sessions),
+            'sessions' => $sessions
         ]);
     }
 }

@@ -504,7 +504,8 @@ class SchoolController extends Controller
         }
 
         // Validate curriculum consistency for super admin updates
-        if ($isSuperAdmin && isset($data['school_type'])) {
+        // Fixed: Now runs validation when ANY curriculum-related field is updated, not just school_type
+        if ($isSuperAdmin && (isset($data['school_type']) || isset($data['primary_curriculum']) || isset($data['secondary_curriculum']))) {
             $this->validateCurriculumConsistency($data, $school);
         }
 

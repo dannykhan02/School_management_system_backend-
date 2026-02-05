@@ -19,7 +19,7 @@ use Illuminate\Support\Facades\Route;
 // PUBLIC ROUTES (No Authentication Required)
 // =====================
 
-// Login
+// Login (now using Redis tokens)
 Route::post('/auth/login', [AuthController::class, 'login']);
 
 // Public school registration
@@ -37,15 +37,17 @@ Route::get('/test', function() {
 });
 
 // =====================
-// PROTECTED ROUTES (Require Authentication)
+// PROTECTED ROUTES (Redis Authentication)
 // =====================
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware('auth.redis')->group(function () {
     
     // ---------------------
     // AUTH & USER MANAGEMENT
     // ---------------------
     Route::post('/auth/logout', [AuthController::class, 'logout']);
+    Route::post('/auth/logout-all', [AuthController::class, 'logoutAll']);
     Route::get('/auth/user', [AuthController::class, 'user']);
+    Route::get('/auth/active-sessions', [AuthController::class, 'activeSessions']);
     Route::post('/user/change-password', [AuthController::class, 'changePassword']);
     
     // User's own profile update (must come before apiResource)
