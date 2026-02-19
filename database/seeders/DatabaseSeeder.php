@@ -17,5 +17,7 @@ class DatabaseSeeder extends Seeder
         $this->call(AcademicYearSeeder::class);
 
         $this->call(SubjectSeeder::class);
+
+        $this->call(SubjectSelectionRulesSeeder::class);
     }
 }

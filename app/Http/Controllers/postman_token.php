@@ -1,6 +1,6 @@
 // Configuration
 $email = 'admin123@gmail.com';  // Change this to your email
-$password = 'password123';     // Change this to your password
+$password = 'password123';       // Change this to your password
 
 // Find user
 $user = App\Models\User::where('email', $email)->first();
@@ -16,8 +16,25 @@ if (!Hash::check($password, $user->password)) {
     exit;
 }
 
-// Create token
-$token = $user->createToken('tinker-login-' . now()->format('Y-m-d-H-i-s'))->plainTextToken;
+// Check if user is active
+if ($user->status !== 'active') {
+    echo "❌ Your account is inactive. Please contact your administrator.\n";
+    exit;
+}
+
+// Get the RedisTokenService instance
+$tokenService = app(App\Services\RedisTokenService::class);
+
+// Generate Redis token with metadata (matching your AuthController logic)
+$token = $tokenService->generateToken($user->id, [
+    'role_id' => $user->role_id,
+    'role' => optional($user->role)->name,
+    'school_id' => $user->school_id,
+    'login_method' => 'email',
+]);
+
+// Count active sessions
+$activeSessions = $tokenService->countUserSessions($user->id);
 
 // Display results
 echo "\n✅ Login Successful!\n";
@@ -30,9 +47,10 @@ echo "  Name: {$user->full_name}\n";
 echo "  Email: {$user->email}\n";
 echo "  Phone: {$user->phone}\n";
 echo "  Status: {$user->status}\n";
+echo "  Active Sessions: {$activeSessions}\n";
 
 if ($user->role) {
-    echo "  Role: {$user->role->name}\n";
+    echo "  Role: {$user->role->name} (ID: {$user->role_id})\n";
 }
 
 if ($user->school) {
@@ -43,3 +61,4 @@ if ($user->school) {
 echo "==========================================\n";
 echo "\nUse this token in your API requests:\n";
 echo "Authorization: Bearer {$token}\n";
+echo "\nToken expires in: " . config('auth.token_ttl', 3600) . " seconds\n";

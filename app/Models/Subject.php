@@ -3,6 +3,9 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Subject extends Model
 {
@@ -15,33 +18,48 @@ class Subject extends Model
         'level',          
         'pathway',        
         'category',       
-        'is_core'         
+        'is_core',
+        // New fields from discussion
+        'is_kicd_compulsory',
+        'learning_area',
+        'minimum_weekly_periods',
+        'maximum_weekly_periods',
+        'prerequisite_subjects',
+        'incompatible_subjects',
+        'requires_lab',
+        'cbc_pathway',
+        'grade_levels',
+        'kicd_code',
+        'national_subject_id',
     ];
 
     protected $casts = [
         'is_core' => 'boolean',
+        'is_kicd_compulsory' => 'boolean',
+        'prerequisite_subjects' => 'array',
+        'incompatible_subjects' => 'array',
+        'requires_lab' => 'boolean',
+        'grade_levels' => 'array',
     ];
 
     /**
      * Each subject belongs to a school.
      */
-    public function school()
+    public function school(): BelongsTo
     {
         return $this->belongsTo(School::class);
     }
 
     /**
-     * Direct teachers pivot removed.
-     * Teachers now connect through subject_assignments.
+     * Subject assignments.
      */
-    public function assignments()
+    public function assignments(): HasMany
     {
         return $this->hasMany(SubjectAssignment::class);
     }
 
     /**
-     * If you still want teachers directly:
-     * returns teachers associated through assignments.
+     * Teachers associated through assignments.
      */
     public function teachers()
     {
@@ -57,7 +75,6 @@ class Subject extends Model
 
     /**
      * Streams for schools with streams enabled.
-     * Also through subject_assignments.
      */
     public function streams()
     {
@@ -71,9 +88,40 @@ class Subject extends Model
         );
     }
 
+    // ---------------------------
+    // NEW SCOPES FROM DISCUSSION
+    // ---------------------------
+
     /**
-     * Query scopes below.
+     * Scope by learning area.
      */
+    public function scopeByLearningArea($query, $area)
+    {
+        return $query->where('learning_area', $area);
+    }
+
+    /**
+     * Scope for KICD compulsory subjects.
+     */
+    public function scopeKICDCompulsory($query)
+    {
+        return $query->where('is_kicd_compulsory', true);
+    }
+
+    /**
+     * Scope for CBC pathway.
+     */
+    public function scopeForPathway($query, $pathway)
+    {
+        return $query->where(function($q) use ($pathway) {
+            $q->where('cbc_pathway', $pathway)
+              ->orWhere('cbc_pathway', 'All');
+        });
+    }
+
+    // ---------------------------
+    // EXISTING SCOPES
+    // ---------------------------
 
     public function scopeCbc($query)
     {
@@ -135,10 +183,82 @@ class Subject extends Model
         return $query->where('pathway', $pathway);
     }
 
+    // ---------------------------
+    // HELPER METHODS
+    // ---------------------------
+
+    /**
+     * Get learning area.
+     */
+    public function getLearningArea(): string
+    {
+        return $this->learning_area;
+    }
+
+    /**
+     * Check if subject is KICD compulsory.
+     */
+    public function isKICDCompulsory(): bool
+    {
+        return $this->is_kicd_compulsory;
+    }
+
+    /**
+     * Get recommended weekly periods.
+     */
+    public function getRecommendedWeeklyPeriods(): int
+    {
+        return $this->minimum_weekly_periods ?? 5;
+    }
+
+    /**
+     * Check if subject is valid for grade level.
+     */
+    public function isValidForGrade($gradeLevel): bool
+    {
+        if (empty($this->grade_levels)) {
+            return true;
+        }
+        
+        return in_array($gradeLevel, $this->grade_levels);
+    }
+
+    /**
+     * Get prerequisite subjects.
+     */
+    public function getPrerequisiteSubjects()
+    {
+        if (empty($this->prerequisite_subjects)) {
+            return collect();
+        }
+        
+        return self::whereIn('id', $this->prerequisite_subjects)->get();
+    }
+
+    /**
+     * Get incompatible subjects.
+     */
+    public function getIncompatibleSubjects()
+    {
+        if (empty($this->incompatible_subjects)) {
+            return collect();
+        }
+        
+        return self::whereIn('id', $this->incompatible_subjects)->get();
+    }
+
+    /**
+     * Check if subject requires lab.
+     */
+    public function requiresLab(): bool
+    {
+        return $this->requires_lab;
+    }
+
     /**
      * Logic to check if a subject is offered by its school.
      */
-    public function isOffered()
+    public function isOffered(): bool
     {
         if (!$this->school) {
             return false;

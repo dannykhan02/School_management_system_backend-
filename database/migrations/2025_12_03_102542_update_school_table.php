@@ -11,19 +11,26 @@ return new class extends Migration
      */
     public function up(): void
     {
+        // This migration is now simplified - just add what's missing
         Schema::table('schools', function (Blueprint $table) {
-            // Add missing curriculum level columns
+            // First, add has_junior_secondary if it doesn't exist
+            if (!Schema::hasColumn('schools', 'has_junior_secondary')) {
+                $table->boolean('has_junior_secondary')->default(false);
+            }
+            
+            // Now add has_senior_secondary
             if (!Schema::hasColumn('schools', 'has_senior_secondary')) {
-                $table->boolean('has_senior_secondary')->default(false)->after('has_junior_secondary');
+                $table->boolean('has_senior_secondary')->default(false);
             }
-
+            
+            // Add has_secondary
             if (!Schema::hasColumn('schools', 'has_secondary')) {
-                $table->boolean('has_secondary')->default(false)->after('has_senior_secondary');
+                $table->boolean('has_secondary')->default(false);
             }
-
-            // Add curriculum type column if missing
+            
+            // Add secondary_curriculum
             if (!Schema::hasColumn('schools', 'secondary_curriculum')) {
-                $table->string('secondary_curriculum')->nullable()->after('primary_curriculum');
+                $table->string('secondary_curriculum')->nullable();
             }
         });
     }
@@ -34,15 +41,8 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('schools', function (Blueprint $table) {
-            if (Schema::hasColumn('schools', 'has_senior_secondary')) {
-                $table->dropColumn('has_senior_secondary');
-            }
-            if (Schema::hasColumn('schools', 'has_secondary')) {
-                $table->dropColumn('has_secondary');
-            }
-            if (Schema::hasColumn('schools', 'secondary_curriculum')) {
-                $table->dropColumn('secondary_curriculum');
-            }
+            // Optional: drop columns if you want to rollback
+            // $table->dropColumn(['has_junior_secondary', 'has_senior_secondary', 'has_secondary', 'secondary_curriculum']);
         });
     }
 };
