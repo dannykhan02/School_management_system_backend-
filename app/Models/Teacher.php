@@ -31,7 +31,7 @@ class Teacher extends Model
         'tsc_status',                 // registered | pending | not_registered
 
         // Curriculum & subject profile
-        'specialization',             // free-text e.g. "Mathematics & Physics"
+        'specialization',             // formatted e.g. "Languages(English) | Sciences(Physics)"
         'curriculum_specialization',  // CBC | 8-4-4 | Both
         'teaching_levels',            // JSON: ["Primary", "Junior Secondary", …]
         'teaching_pathways',          // JSON: ["STEM", "Arts", "Social Sciences"]  SS only
@@ -397,18 +397,35 @@ class Teacher extends Model
     }
 
     /**
-     * Generate a specialization string from the names of the teacher's qualified subjects.
-     * If no subjects, set to 'General'.
+     * Generate a formatted specialization string from the teacher's qualified subjects.
+     *
+     * Format:  Category(Subject1, Subject2) | Category(Subject3)
+     * Example: Languages(English, Kiswahili) | Sciences(Physics, Chemistry)
+     *
+     * - Deduplicates by name first to avoid repeats across levels/pathways
+     *   (e.g. English at PP, JS, and SS all collapse to one "English" entry).
+     * - Groups deduplicated subjects by their category.
+     * - Falls back to "General" when no subjects are assigned.
      */
     public function updateSpecializationFromSubjects(): void
     {
         if ($this->qualifiedSubjects->isEmpty()) {
             $this->specialization = 'General';
-        } else {
-            $subjectNames = $this->qualifiedSubjects->pluck('name')->toArray();
-            $this->specialization = implode(', ', $subjectNames);
+            $this->saveQuietly();
+            return;
         }
-        $this->saveQuietly(); // Save without firing events
+
+        $this->specialization = $this->qualifiedSubjects
+            ->unique('name')                            // collapse cross-level duplicates
+            ->sortBy('category')                        // consistent ordering
+            ->groupBy('category')                       // Languages, Sciences, Mathematics, …
+            ->map(function ($subjects, $category) {
+                $names = $subjects->pluck('name')->unique()->implode(', ');
+                return "{$category}({$names})";         // e.g. Languages(English, Kiswahili)
+            })
+            ->implode(' | ');                           // Languages(English) | Sciences(Physics)
+
+        $this->saveQuietly();
     }
 
     // ──────────────────────────────────────────────────────────────────────────
