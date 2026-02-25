@@ -114,6 +114,12 @@ Route::middleware('auth.redis')->group(function () {
     Route::get('/teachers/school/{schoolId}', [TeacherController::class, 'getTeachersBySchool']);
     Route::get('/teachers/stream/{streamId}', [TeacherController::class, 'getTeachersByStream']);
 
+    // ✅ Teacher combinations endpoint for form dropdown
+    Route::get('/teacher-combinations', [TeacherController::class, 'getCombinations']);
+
+    // ✅ FIX 2: Add missing preview route
+    Route::get('/teacher-combinations/{id}/preview', [TeacherController::class, 'previewCombination']);
+
     // 2. Routes with {teacherId} parameter
     Route::get('/teachers/{teacherId}/workload', [TeacherController::class, 'getWorkload']);
     Route::get('/teachers/{teacherId}/timetable-capacity', [TeacherController::class, 'getTimetableCapacity']);
@@ -129,10 +135,7 @@ Route::middleware('auth.redis')->group(function () {
     Route::get('/teachers/{teacherId}/streams-as-class-teacher', [TeacherController::class, 'getStreamsAsClassTeacher']);
     Route::get('/teachers/{teacherId}/streams-as-teacher', [TeacherController::class, 'getStreamsAsTeacher']);
 
-    // ✅ NEW: Subject combination management routes
-    // GET    /api/teachers/{teacherId}/subjects              → list teacher's qualified subjects with pivot data
-    // POST   /api/teachers/{teacherId}/subjects              → add one subject to teacher's combination
-    // DELETE /api/teachers/{teacherId}/subjects/{subjectId}  → remove one subject from combination
+    // Subject combination management routes
     Route::get('/teachers/{teacherId}/subjects', [TeacherController::class, 'getSubjects']);
     Route::post('/teachers/{teacherId}/subjects', [TeacherController::class, 'addSubject']);
     Route::delete('/teachers/{teacherId}/subjects/{subjectId}', [TeacherController::class, 'removeSubject']);
@@ -145,8 +148,7 @@ Route::middleware('auth.redis')->group(function () {
     // ---------------------
     // ⚠️ IMPORTANT: Specific routes MUST come BEFORE {subject} parameter routes
 
-    // ✅ NEW: Subject filter for teacher form (must be BEFORE apiResource and BEFORE {subjectId} routes)
-    // GET /api/subjects/filter?curriculum=CBC&level=Junior Secondary&pathway=STEM
+    // Subject filter for teacher form (must be BEFORE apiResource and BEFORE {subjectId} routes)
     Route::get('/subjects/filter', [TeacherController::class, 'filterSubjectsForTeacher']);
 
     // Existing subject-specific routes
@@ -178,6 +180,6 @@ Route::middleware('auth.redis')->group(function () {
     // ---------------------
     Route::apiResource('students', StudentController::class);
     Route::get('get-students', [StudentController::class, 'getStudents']);
-    Route::get('class-studegints/{classId}', [StudentController::class, 'getClassStudents']);
+    Route::get('class-students/{classId}', [StudentController::class, 'getClassStudents']);
     Route::get('get-parents', [StudentController::class, 'getParentsForMySchool']);
 });

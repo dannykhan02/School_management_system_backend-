@@ -4,12 +4,38 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use App\Services\WorkloadCalculator;
 use App\Services\SpecializationMatcher;
 
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Teacher  —  App\Models\Teacher
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * WHAT CHANGED (v2 — Teacher Combination update)
+ * ──────────────────────────────────────────────
+ *  NEW FIELDS:
+ *    combination_id           FK → teacher_combinations.id
+ *    bed_combination_code     Denormalised snapshot of the combination code
+ *    bed_combination_label    Denormalised snapshot of the combination label
+ *    bed_graduation_year      Year of graduation
+ *    bed_institution_type     Type of awarding institution
+ *    bed_awarding_institution Name of awarding institution
+ *
+ *  NEW RELATIONSHIPS:
+ *    combination()            BelongsTo → TeacherCombination
+ *
+ *  NEW METHODS:
+ *    syncFromCombination()    Auto-populate qualified subjects & pathways from the
+ *                             linked TeacherCombination record
+ *    getTeachableSubjectNames()  All subject names (primary + derived) from combination
+ *    canTeachSubjectByName()  Quick name-based check against combination
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
 class Teacher extends Model
 {
     use HasFactory;
@@ -26,17 +52,25 @@ class Teacher extends Model
         // Professional
         'qualification',
         'employment_type',
-        'employment_status',          // active | on_leave | suspended | resigned | retired
+        'employment_status',           // active | on_leave | suspended | resigned | retired
         'tsc_number',
-        'tsc_status',                 // registered | pending | not_registered
+        'tsc_status',                  // registered | pending | not_registered
+
+        // ── NEW: B.Ed Combination ──────────────────────────────────────────
+        'combination_id',              // FK → teacher_combinations
+        'bed_combination_code',        // Snapshot: e.g. "BED-MATH-PHY"
+        'bed_combination_label',       // Snapshot: e.g. "Mathematics & Physics"
+        'bed_graduation_year',         // e.g. 2018
+        'bed_institution_type',        // university | teacher_training_college | technical_university
+        'bed_awarding_institution',    // e.g. "Kenyatta University"
 
         // Curriculum & subject profile
-        'specialization',             // formatted e.g. "Languages(English) | Sciences(Physics)"
-        'curriculum_specialization',  // CBC | 8-4-4 | Both
-        'teaching_levels',            // JSON: ["Primary", "Junior Secondary", …]
-        'teaching_pathways',          // JSON: ["STEM", "Arts", "Social Sciences"]  SS only
-        'specialization_subjects',    // JSON: [subjectId, …]  quick-lookup shortcut
-        'subject_categories',         // JSON: ["Sciences", "Mathematics", …]
+        'specialization',              // formatted e.g. "Mathematics(Mathematics) | Sciences(Physics)"
+        'curriculum_specialization',   // CBC | 8-4-4 | Both
+        'teaching_levels',             // JSON: ["Primary", "Junior Secondary", …]
+        'teaching_pathways',           // JSON: ["STEM", "Arts", "Social Sciences"]  SS only
+        'specialization_subjects',     // JSON: [subjectId, …]  quick-lookup shortcut
+        'subject_categories',          // JSON: ["Sciences", "Mathematics", …]
 
         // Workload limits
         'max_subjects',
@@ -58,17 +92,23 @@ class Teacher extends Model
     ];
 
     protected $casts = [
+        // Arrays
         'teaching_levels'                    => 'array',
         'teaching_pathways'                  => 'array',
         'specialization_subjects'            => 'array',
         'subject_categories'                 => 'array',
+        // Booleans
         'is_class_teacher'                   => 'boolean',
+        // Integers
         'max_weekly_lessons'                 => 'integer',
         'min_weekly_lessons'                 => 'integer',
-        'max_subjects'                        => 'integer',
-        'max_classes'                         => 'integer',
+        'max_subjects'                       => 'integer',
+        'max_classes'                        => 'integer',
         'current_class_teacher_classroom_id' => 'integer',
         'current_class_teacher_stream_id'    => 'integer',
+        'combination_id'                     => 'integer',
+        'bed_graduation_year'                => 'integer',
+        // Dates
         'created_at'                         => 'datetime',
         'updated_at'                         => 'datetime',
     ];
@@ -90,9 +130,15 @@ class Teacher extends Model
         'Social Sciences',
     ];
 
-    public const CURRICULUM_TYPES     = ['CBC', '8-4-4', 'Both'];
-    public const EMPLOYMENT_STATUSES  = ['active', 'on_leave', 'suspended', 'resigned', 'retired'];
-    public const TSC_STATUSES         = ['registered', 'pending', 'not_registered'];
+    public const CURRICULUM_TYPES    = ['CBC', '8-4-4', 'Both'];
+    public const EMPLOYMENT_STATUSES = ['active', 'on_leave', 'suspended', 'resigned', 'retired'];
+    public const TSC_STATUSES        = ['registered', 'pending', 'not_registered'];
+
+    public const INSTITUTION_TYPES = [
+        'university',
+        'teacher_training_college',
+        'technical_university',
+    ];
 
     // ──────────────────────────────────────────────────────────────────────────
     // CORE RELATIONSHIPS
@@ -109,23 +155,33 @@ class Teacher extends Model
     }
 
     // ──────────────────────────────────────────────────────────────────────────
+    // NEW: B.Ed COMBINATION RELATIONSHIP
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The canonical B.Ed combination record this teacher holds.
+     *
+     * Usage:
+     *   $teacher->combination->name           // "Mathematics & Physics"
+     *   $teacher->combination->eligible_pathways // ["STEM"]
+     *   $teacher->combination->primary_subjects  // ["Mathematics", "Physics"]
+     */
+    public function combination(): BelongsTo
+    {
+        return $this->belongsTo(TeacherCombination::class, 'combination_id');
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
     // SUBJECT RELATIONSHIPS  (via teacher_subjects pivot)
     // ──────────────────────────────────────────────────────────────────────────
 
     /**
      * All subjects this teacher is qualified to teach.
-     *
-     * Uses the TeacherSubject pivot model so that $subject->pivot is a full
-     * TeacherSubject instance with helpers like allowsLevel().
-     *
-     * Eager-load example:
-     *   $teacher->load('qualifiedSubjects')
-     *   $teacher->qualifiedSubjects->each(fn($s) => $s->pivot->allowsLevel('Primary'))
      */
     public function qualifiedSubjects(): BelongsToMany
     {
         return $this->belongsToMany(Subject::class, 'teacher_subjects')
-                    ->using(TeacherSubject::class)           // ← pivot model
+                    ->using(TeacherSubject::class)
                     ->withPivot([
                         'is_primary_subject',
                         'years_experience',
@@ -135,7 +191,7 @@ class Teacher extends Model
     }
 
     /**
-     * Only the subjects marked as primary/specialisation.
+     * Only the subjects marked as primary / specialisation.
      */
     public function primarySubjects(): BelongsToMany
     {
@@ -179,7 +235,7 @@ class Teacher extends Model
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // STREAM-SCHOOL RELATIONSHIPS
+    // STREAM / CLASSROOM RELATIONSHIPS
     // ──────────────────────────────────────────────────────────────────────────
 
     /** Streams where this teacher IS the class teacher (FK on streams table). */
@@ -188,17 +244,13 @@ class Teacher extends Model
         return $this->hasMany(Stream::class, 'class_teacher_id');
     }
 
-    /** Streams this teacher teaches in (teaching – not class-teacher). */
+    /** Streams this teacher teaches in (not class-teacher). */
     public function teachingStreams(): BelongsToMany
     {
         return $this->belongsToMany(
             Stream::class, 'stream_teacher', 'teacher_id', 'stream_id'
         )->withTimestamps();
     }
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // NON-STREAM SCHOOL RELATIONSHIPS
-    // ──────────────────────────────────────────────────────────────────────────
 
     /** Classrooms this teacher is attached to. */
     public function classrooms(): BelongsToMany
@@ -215,12 +267,144 @@ class Teacher extends Model
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // TEACHING PROFILE HELPERS
+    // NEW: COMBINATION-DRIVEN SYNC METHODS
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Populate the teacher's qualified subjects, teaching pathways, and
+     * specialization string from their linked TeacherCombination.
+     *
+     * Call this after setting combination_id and saving — typically from the
+     * TeacherController store/update flow.
+     *
+     * Steps:
+     *  1. Load the combination.
+     *  2. Match combination's subject names against actual Subject rows for
+     *     this school.
+     *  3. Sync the teacher_subjects pivot (primary = primary_subjects,
+     *     secondary = derived_subjects).
+     *  4. Update teaching_pathways and teaching_levels from the combination.
+     *  5. Regenerate the specialization string.
+     *
+     * @param  bool  $overwritePathways  Replace teaching_pathways (default true).
+     *                                   Pass false to merge instead.
+     */
+    public function syncFromCombination(bool $overwritePathways = true): void
+    {
+        $combo = $this->combination;
+        if (!$combo) return;
+
+        // ── Step 1: Denormalise snapshot fields ───────────────────────────────
+        $this->bed_combination_code  = $combo->code;
+        $this->bed_combination_label = $combo->name;
+
+        // ── Step 2: Auto-set eligible levels (only expand, never shrink) ──────
+        $existing = $this->teaching_levels ?? [];
+        $merged   = array_values(array_unique(array_merge($existing, $combo->eligible_levels ?? [])));
+        $this->teaching_levels = $merged;
+
+        // ── Step 3: Pathways ──────────────────────────────────────────────────
+        if ($overwritePathways) {
+            $this->teaching_pathways = $combo->eligible_pathways ?? [];
+        } else {
+            $existingPw = $this->teaching_pathways ?? [];
+            $this->teaching_pathways = array_values(array_unique(
+                array_merge($existingPw, $combo->eligible_pathways ?? [])
+            ));
+        }
+
+        $this->saveQuietly();
+
+        // ── Step 4: Sync teacher_subjects pivot ───────────────────────────────
+        $primaryNames  = $combo->primary_subjects  ?? [];
+        $derivedNames  = $combo->derived_subjects  ?? [];
+
+        // Find matching Subject rows for this school by name (case-insensitive)
+        $allNames = array_merge($primaryNames, $derivedNames);
+
+        $subjects = Subject::where('school_id', $this->school_id)
+            ->whereIn('name', $allNames)
+            ->get()
+            ->keyBy('name');                 // keyed by exact name
+
+        $payload = [];
+
+        foreach ($primaryNames as $name) {
+            $subject = $subjects->get($name);
+            if ($subject) {
+                $payload[$subject->id] = [
+                    'is_primary_subject' => true,
+                    'years_experience'   => null,
+                    'can_teach_levels'   => json_encode($combo->eligible_levels),
+                ];
+            }
+        }
+
+        foreach ($derivedNames as $name) {
+            $subject = $subjects->get($name);
+            if ($subject && !isset($payload[$subject->id])) {
+                $payload[$subject->id] = [
+                    'is_primary_subject' => false,
+                    'years_experience'   => null,
+                    'can_teach_levels'   => json_encode($combo->eligible_levels),
+                ];
+            }
+        }
+
+        $this->qualifiedSubjects()->sync($payload);
+
+        // Keep the JSON shortcut column in sync
+        $this->update(['specialization_subjects' => array_keys($payload) ?: null]);
+
+        // ── Step 5: Regenerate specialization string ──────────────────────────
+        $this->load('qualifiedSubjects');
+        $this->updateSpecializationFromSubjects();
+    }
+
+    /**
+     * Returns all subject names this teacher can teach based on their
+     * TeacherCombination (primary + derived).
+     *
+     * Falls back to an empty array if no combination is linked.
+     */
+    public function getTeachableSubjectNames(): array
+    {
+        if (!$this->combination) {
+            $this->load('combination');
+        }
+
+        return $this->combination?->allTeachableSubjects() ?? [];
+    }
+
+    /**
+     * Quick name-based check: can this teacher teach a subject by its name?
+     *
+     * Useful in validation before a full Subject model lookup.
+     *
+     * @param  string       $subjectName  e.g. "Integrated Science"
+     * @param  string|null  $level        Optional level filter
+     */
+    public function canTeachSubjectByName(string $subjectName, ?string $level = null): bool
+    {
+        // First try the combination lookup (fast, no DB hit if already loaded)
+        $combo = $this->combination;
+        if ($combo) {
+            return $combo->canTeach($subjectName, $level);
+        }
+
+        // Fallback: check the qualified subjects pivot directly
+        return $this->qualifiedSubjects()
+            ->where('name', $subjectName)
+            ->when($level, fn($q) => $q->where('level', $level))
+            ->exists();
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // EXISTING: TEACHING PROFILE HELPERS
     // ──────────────────────────────────────────────────────────────────────────
 
     /**
      * Does this teacher teach at the given level?
-     *   $teacher->teachesAtLevel('Junior Secondary')  // true/false
      */
     public function teachesAtLevel(string $level): bool
     {
@@ -229,7 +413,6 @@ class Teacher extends Model
 
     /**
      * Does this teacher cover the given CBC pathway?
-     *   $teacher->teachesPathway('STEM')
      */
     public function teachesPathway(string $pathway): bool
     {
@@ -238,10 +421,6 @@ class Teacher extends Model
 
     /**
      * Return qualified subjects filtered to a specific level and/or pathway.
-     * Respects the per-subject can_teach_levels override on the pivot.
-     *
-     * @param  string|null  $level    e.g. "Junior Secondary"
-     * @param  string|null  $pathway  e.g. "STEM"
      */
     public function subjectsForLevel(?string $level = null, ?string $pathway = null)
     {
@@ -249,12 +428,10 @@ class Teacher extends Model
 
         if ($level) {
             $subjects = $subjects->filter(function ($subject) use ($level) {
-                // Respect per-pivot level override first
                 $canTeachLevels = $subject->pivot->can_teach_levels;
                 if (!empty($canTeachLevels)) {
                     return in_array($level, (array) $canTeachLevels);
                 }
-                // Fall back to subject's own level
                 return $subject->level === $level;
             });
         }
@@ -269,11 +446,7 @@ class Teacher extends Model
     }
 
     /**
-     * Sync the teacher's qualified subject list.
-     *
-     * @param  array  $subjectIds   e.g. [1, 5, 12]
-     * @param  array  $pivotData    Keyed by subject_id for overrides:
-     *                              [5 => ['is_primary_subject' => true, 'years_experience' => 3]]
+     * Sync the teacher's qualified subject list manually.
      */
     public function syncQualifiedSubjects(array $subjectIds, array $pivotData = []): void
     {
@@ -291,14 +464,11 @@ class Teacher extends Model
         }
 
         $this->qualifiedSubjects()->sync($payload);
-
-        // Keep the JSON shortcut column in sync
         $this->update(['specialization_subjects' => $subjectIds ?: null]);
     }
 
     /**
      * Is this teacher qualified to teach a specific subject?
-     * Checks the teacher_subjects pivot + level restrictions.
      */
     public function isQualifiedForSubject(Subject $subject): bool
     {
@@ -311,7 +481,6 @@ class Teacher extends Model
             return false;
         }
 
-        // If the pivot has level overrides, honour them
         if (!empty($pivot->can_teach_levels)) {
             $levels = is_array($pivot->can_teach_levels)
                 ? $pivot->can_teach_levels
@@ -381,7 +550,7 @@ class Teacher extends Model
     public function hasSpecialization(string $subjectCategory): bool
     {
         if (empty($this->subject_categories)) {
-            return true; // No restriction set
+            return true;
         }
         return in_array($subjectCategory, (array) $this->subject_categories);
     }
@@ -397,15 +566,11 @@ class Teacher extends Model
     }
 
     /**
-     * Generate a formatted specialization string from the teacher's qualified subjects.
+     * Generate a formatted specialization string from the teacher's
+     * qualified subjects.
      *
      * Format:  Category(Subject1, Subject2) | Category(Subject3)
      * Example: Languages(English, Kiswahili) | Sciences(Physics, Chemistry)
-     *
-     * - Deduplicates by name first to avoid repeats across levels/pathways
-     *   (e.g. English at PP, JS, and SS all collapse to one "English" entry).
-     * - Groups deduplicated subjects by their category.
-     * - Falls back to "General" when no subjects are assigned.
      */
     public function updateSpecializationFromSubjects(): void
     {
@@ -416,14 +581,14 @@ class Teacher extends Model
         }
 
         $this->specialization = $this->qualifiedSubjects
-            ->unique('name')                            // collapse cross-level duplicates
-            ->sortBy('category')                        // consistent ordering
-            ->groupBy('category')                       // Languages, Sciences, Mathematics, …
+            ->unique('name')
+            ->sortBy('category')
+            ->groupBy('category')
             ->map(function ($subjects, $category) {
                 $names = $subjects->pluck('name')->unique()->implode(', ');
-                return "{$category}({$names})";         // e.g. Languages(English, Kiswahili)
+                return "{$category}({$names})";
             })
-            ->implode(' | ');                           // Languages(English) | Sciences(Physics)
+            ->implode(' | ');
 
         $this->saveQuietly();
     }
