@@ -6,6 +6,7 @@ use App\Models\AcademicYear;
 use App\Models\School;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 class AcademicYearController extends Controller
 {
@@ -22,32 +23,26 @@ class AcademicYearController extends Controller
     }
 
     /**
-     * Create a new academic year.
+     * Create a new academic year (single term).
      */
     public function store(Request $request)
     {
         $user = Auth::user();
 
-        // Get the school to determine curriculum type
         $school = School::find($user->school_id);
-        
+
         if (!$school) {
-            return response()->json([
-                'message' => 'School not found'
-            ], 404);
+            return response()->json(['message' => 'School not found'], 404);
         }
 
-        // Define validation rules
         $validationRules = [
-            'year' => 'required|string|max:255',
-            'term' => 'required|string|max:255',
+            'year'       => 'required|string|max:255',
+            'term'       => 'required|string|max:255',
             'start_date' => 'nullable|date',
-            'end_date' => 'nullable|date',
-            'is_active' => 'sometimes|boolean'
+            'end_date'   => 'nullable|date',
+            'is_active'  => 'sometimes|boolean',
         ];
 
-        // If school has "Both" curriculum, require curriculum_type selection
-        // Otherwise, don't require it (will be auto-set)
         if ($school->primary_curriculum === 'Both') {
             $validationRules['curriculum_type'] = 'required|in:CBC,8-4-4';
         } else {
@@ -56,7 +51,6 @@ class AcademicYearController extends Controller
 
         $validated = $request->validate($validationRules);
 
-        // Auto-set curriculum_type for single curriculum schools
         if ($school->primary_curriculum !== 'Both') {
             $validated['curriculum_type'] = $school->primary_curriculum;
         }
@@ -67,19 +61,106 @@ class AcademicYearController extends Controller
     }
 
     /**
+     * Create multiple terms for a given year in one action.
+     *
+     * Expected payload:
+     * {
+     *   "year": "2026",
+     *   "curriculum_type": "CBC",          // required only for "Both" curriculum schools
+     *   "terms": [
+     *     { "term": "Term 1", "start_date": "2026-01-05", "end_date": "2026-04-03", "is_active": true },
+     *     { "term": "Term 2", "start_date": "2026-05-04", "end_date": "2026-07-31" },
+     *     { "term": "Term 3", "start_date": "2026-09-01", "end_date": "2026-11-27" }
+     *   ]
+     * }
+     */
+    public function storeBulk(Request $request)
+    {
+        $user   = Auth::user();
+        $school = School::find($user->school_id);
+
+        if (!$school) {
+            return response()->json(['message' => 'School not found'], 404);
+        }
+
+        // Top-level validation
+        $topRules = [
+            'year'              => 'required|string|max:255',
+            'terms'             => 'required|array|min:1',
+            'terms.*.term'      => 'required|string|max:255',
+            'terms.*.start_date'=> 'nullable|date',
+            'terms.*.end_date'  => 'nullable|date|after_or_equal:terms.*.start_date',
+            'terms.*.is_active' => 'sometimes|boolean',
+        ];
+
+        if ($school->primary_curriculum === 'Both') {
+            $topRules['curriculum_type'] = 'required|in:CBC,8-4-4';
+        } else {
+            $topRules['curriculum_type'] = 'sometimes|in:CBC,8-4-4';
+        }
+
+        $validated = $request->validate($topRules);
+
+        // Resolve curriculum type
+        $curriculumType = $school->primary_curriculum !== 'Both'
+            ? $school->primary_curriculum
+            : $validated['curriculum_type'];
+
+        // Prevent duplicate terms for the same year in the same school
+        $incomingTermNames = array_column($validated['terms'], 'term');
+
+        $existingTerms = AcademicYear::where('school_id', $user->school_id)
+            ->where('year', $validated['year'])
+            ->where('curriculum_type', $curriculumType)
+            ->whereIn('term', $incomingTermNames)
+            ->pluck('term')
+            ->toArray();
+
+        if (!empty($existingTerms)) {
+            return response()->json([
+                'message'        => 'Some terms already exist for this year.',
+                'existing_terms' => $existingTerms,
+            ], 422);
+        }
+
+        // Build records and insert inside a transaction
+        $created = DB::transaction(function () use ($validated, $user, $curriculumType) {
+            $records = [];
+
+            foreach ($validated['terms'] as $termData) {
+                $records[] = AcademicYear::create([
+                    'school_id'       => $user->school_id,
+                    'year'            => $validated['year'],
+                    'curriculum_type' => $curriculumType,
+                    'term'            => $termData['term'],
+                    'start_date'      => $termData['start_date'] ?? null,
+                    'end_date'        => $termData['end_date']   ?? null,
+                    'is_active'       => $termData['is_active']  ?? false,
+                ]);
+            }
+
+            return $records;
+        });
+
+        return response()->json([
+            'message' => count($created) . ' term(s) created successfully.',
+            'data'    => $created,
+        ], 201);
+    }
+
+    /**
      * Get academic years by curriculum.
      */
     public function getByCurriculum($curriculum)
     {
         $user = Auth::user();
 
-        // Normalize underscores -> dashes (Laravel converts URL "-" to "_")
         $curriculum = str_replace('_', '-', $curriculum);
 
         if (!in_array($curriculum, ['CBC', '8-4-4'])) {
             return response()->json([
                 'message' => 'Invalid curriculum type',
-                'error' => 'InvalidCurriculumType',
+                'error'   => 'InvalidCurriculumType',
             ], 400);
         }
 
@@ -112,35 +193,27 @@ class AcademicYearController extends Controller
             ->where('id', $id)
             ->firstOrFail();
 
-        // Get the school to determine curriculum type rules
         $school = School::find($user->school_id);
-        
+
         if (!$school) {
-            return response()->json([
-                'message' => 'School not found'
-            ], 404);
+            return response()->json(['message' => 'School not found'], 404);
         }
 
-        // Define validation rules
         $validationRules = [
-            'year' => 'sometimes|string|max:255',
-            'term' => 'sometimes|string|max:255',
+            'year'       => 'sometimes|string|max:255',
+            'term'       => 'sometimes|string|max:255',
             'start_date' => 'sometimes|date|nullable',
-            'end_date' => 'sometimes|date|nullable',
-            'is_active' => 'sometimes|boolean'
+            'end_date'   => 'sometimes|date|nullable',
+            'is_active'  => 'sometimes|boolean',
         ];
 
-        // For "Both" curriculum schools, allow curriculum_type updates
-        // For single curriculum schools, prevent curriculum_type changes
         if ($school->primary_curriculum === 'Both') {
             $validationRules['curriculum_type'] = 'sometimes|in:CBC,8-4-4';
         } else {
-            // For single curriculum schools, don't allow curriculum_type to be changed
-            // It should always match the school's primary curriculum
             if ($request->has('curriculum_type') && $request->curriculum_type !== $school->primary_curriculum) {
                 return response()->json([
                     'message' => 'Curriculum type cannot be changed for this school',
-                    'error' => 'InvalidCurriculumChange',
+                    'error'   => 'InvalidCurriculumChange',
                 ], 422);
             }
             $validationRules['curriculum_type'] = 'sometimes|in:CBC,8-4-4';
@@ -148,7 +221,6 @@ class AcademicYearController extends Controller
 
         $validated = $request->validate($validationRules);
 
-        // For single curriculum schools, ensure curriculum_type matches school's primary curriculum
         if ($school->primary_curriculum !== 'Both') {
             $validated['curriculum_type'] = $school->primary_curriculum;
         }

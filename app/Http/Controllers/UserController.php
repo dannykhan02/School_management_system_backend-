@@ -11,79 +11,102 @@ use Illuminate\Validation\ValidationException;
 
 class UserController extends BaseController
 {
-    // Get all users for the current school with optional role filtering
+    // Get all users for the current school with pagination, search, and role filtering
     public function index(Request $request)
     {
         $authUser = $this->getUser($request);
-        
+
         if (!$authUser) {
             return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
         }
-        
-        $query = User::where('school_id', $authUser->school_id);
-        
+
+        // Pagination params
+        $perPage = min((int) $request->get('per_page', 20), 100); // cap at 100
+        $page    = max((int) $request->get('page', 1), 1);
+
+        $query = User::where('school_id', $authUser->school_id)->with('role');
+
         // Filter by role if provided
-        if ($request->has('role_id')) {
+        if ($request->filled('role_id')) {
             $query->where('role_id', $request->role_id);
         }
-        
+
+        // Search by name or email
+        if ($request->filled('search')) {
+            $search = '%' . trim($request->search) . '%';
+            $query->where(function ($q) use ($search) {
+                $q->where('full_name', 'like', $search)
+                  ->orWhere('email',     'like', $search);
+            });
+        }
+
         // Filter out users who are already teachers if requested
-        if ($request->has('exclude_teachers') && $request->exclude_teachers) {
+        if ($request->boolean('exclude_teachers')) {
             $teacherUserIds = \App\Models\Teacher::pluck('user_id');
             $query->whereNotIn('id', $teacherUserIds);
         }
-        
-        $users = $query->with('role')->get();
-        
-        return response()->json($users);
+
+        // Order for consistent pagination
+        $query->orderBy('full_name');
+
+        $paginated = $query->paginate($perPage, ['*'], 'page', $page);
+
+        return response()->json([
+            'data'          => $paginated->items(),
+            'total'         => $paginated->total(),
+            'per_page'      => $paginated->perPage(),
+            'current_page'  => $paginated->currentPage(),
+            'last_page'     => $paginated->lastPage(),
+            'from'          => $paginated->firstItem(),
+            'to'            => $paginated->lastItem(),
+            'has_more_pages'=> $paginated->hasMorePages(),
+        ]);
     }
 
     // Get super admins for the system
     public function getSuperAdmins(Request $request)
     {
         $authUser = $this->getUser($request);
-        
+
         if (!$authUser) {
             return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
         }
 
-        // Find the super admin role - try different possible names including the exact one from your database
-        $superAdminRole = Role::where(function($query) {
-            $query->where('name', 'super-admin')  // Exact match from your database
+        $superAdminRole = Role::where(function ($query) {
+            $query->where('name', 'super-admin')
                   ->orWhere('name', 'superadmin')
                   ->orWhere('name', 'super_admin')
                   ->orWhere('name', 'Super Admin')
                   ->orWhere('name', 'Super Administrator');
         })->first();
-        
+
         if (!$superAdminRole) {
             return response()->json([
-                'message' => 'Super admin role not found in the system',
-                'super_admins' => []
+                'message'      => 'Super admin role not found in the system',
+                'super_admins' => [],
             ], 200);
         }
 
-        // Get all super admins - they don't belong to any specific school (school_id is null or 0)
         $superAdmins = User::where('role_id', $superAdminRole->id)
             ->where('status', 'active')
             ->select('id', 'full_name', 'email', 'phone', 'created_at', 'status')
             ->orderBy('full_name')
             ->get()
-            ->map(function($admin) {
+            ->map(function ($admin) {
                 return [
-                    'id' => $admin->id,
-                    'name' => $admin->full_name,
-                    'email' => $admin->email,
-                    'phone' => $admin->phone,
+                    'id'         => $admin->id,
+                    'name'       => $admin->full_name,
+                    'email'      => $admin->email,
+                    'phone'      => $admin->phone,
                     'created_at' => $admin->created_at ? $admin->created_at->format('Y-m-d H:i:s') : null,
-                    'is_active' => $admin->status === 'active'
+                    'is_active'  => $admin->status === 'active',
                 ];
             });
 
         return response()->json([
-            'count' => $superAdmins->count(),
-            'super_admins' => $superAdmins,
-            'role_name' => $superAdminRole->name
+            'count'       => $superAdmins->count(),
+            'super_admins'=> $superAdmins,
+            'role_name'   => $superAdminRole->name,
         ]);
     }
 
@@ -91,48 +114,45 @@ class UserController extends BaseController
     public function store(Request $request)
     {
         $authUser = $this->getUser($request);
-        
+
         if (!$authUser) {
             return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
         }
 
         try {
             $data = $request->validate([
-                'role_id' => 'required|exists:roles,id',
+                'role_id'   => 'required|exists:roles,id',
                 'full_name' => 'required|string',
-                'email' => 'nullable|email|unique:users,email',
-                'phone' => 'nullable|string',
-                'gender' => 'nullable|string',
-                'status' => 'nullable|in:active,inactive',
+                'email'     => 'nullable|email|unique:users,email',
+                'phone'     => 'nullable|string',
+                'gender'    => 'nullable|string',
+                'status'    => 'nullable|in:active,inactive',
             ]);
         } catch (ValidationException $e) {
             return response()->json([
                 'message' => 'Validation failed',
-                'errors' => $e->errors()
+                'errors'  => $e->errors(),
             ], 422);
         }
 
-        // Force the user to belong to the same school as the logged-in user
-        $data['school_id'] = $authUser->school_id;
-        $data['status'] = $data['status'] ?? 'active';
-        
-        // Set default password before creating the user
-        $data['password'] = Hash::make('password123');
+        $data['school_id']            = $authUser->school_id;
+        $data['status']               = $data['status'] ?? 'active';
+        $data['password']             = Hash::make('password123');
         $data['must_change_password'] = true;
 
         $user = User::create($data);
 
         return response()->json([
             'message' => 'User created successfully',
-            'user' => $user,
+            'user'    => $user,
         ], 201);
     }
 
-    // Show a single user 
+    // Show a single user
     public function show(Request $request, User $user)
     {
         $authUser = $this->getUser($request);
-        
+
         $authError = $this->checkAuthorization($authUser, $user);
         if ($authError) {
             return $authError;
@@ -145,7 +165,7 @@ class UserController extends BaseController
     public function update(Request $request, User $user)
     {
         $authUser = $this->getUser($request);
-        
+
         $authError = $this->checkAuthorization($authUser, $user);
         if ($authError) {
             return $authError;
@@ -153,17 +173,17 @@ class UserController extends BaseController
 
         try {
             $data = $request->validate([
-                'role_id' => 'sometimes|required|exists:roles,id',
+                'role_id'   => 'sometimes|required|exists:roles,id',
                 'full_name' => 'sometimes|required|string',
-                'email' => 'sometimes|required|email|unique:users,email,' . $user->id,
-                'phone' => 'nullable|string',
-                'gender' => 'nullable|string',
-                'status' => 'nullable|in:active,inactive',
+                'email'     => 'sometimes|required|email|unique:users,email,' . $user->id,
+                'phone'     => 'nullable|string',
+                'gender'    => 'nullable|string',
+                'status'    => 'nullable|in:active,inactive',
             ]);
         } catch (ValidationException $e) {
             return response()->json([
                 'message' => 'Validation failed',
-                'errors' => $e->errors()
+                'errors'  => $e->errors(),
             ], 422);
         }
 
@@ -172,11 +192,11 @@ class UserController extends BaseController
         return response()->json($user);
     }
 
-    // Update own profile (authenticated user updates their own details)
+    // Update own profile
     public function updateProfile(Request $request)
     {
         $authUser = $this->getUser($request);
-        
+
         if (!$authUser) {
             return response()->json(['message' => 'Unauthorized. Please log in.'], 401);
         }
@@ -184,24 +204,22 @@ class UserController extends BaseController
         try {
             $data = $request->validate([
                 'full_name' => 'sometimes|required|string|max:255',
-                'email' => 'sometimes|required|email|unique:users,email,' . $authUser->id,
-                'phone' => 'nullable|string|max:20',
-                'gender' => 'nullable|string|in:male,female,other',
+                'email'     => 'sometimes|required|email|unique:users,email,' . $authUser->id,
+                'phone'     => 'nullable|string|max:20',
+                'gender'    => 'nullable|string|in:male,female,other',
             ]);
         } catch (ValidationException $e) {
             return response()->json([
                 'message' => 'Validation failed',
-                'errors' => $e->errors()
+                'errors'  => $e->errors(),
             ], 422);
         }
 
-        // Users cannot change their own role_id or status through this endpoint
-        // Only allow updating personal information
         $authUser->update($data);
 
         return response()->json([
             'message' => 'Profile updated successfully',
-            'user' => $authUser->load('role', 'school')
+            'user'    => $authUser->load('role', 'school'),
         ]);
     }
 
@@ -209,7 +227,7 @@ class UserController extends BaseController
     public function destroy(Request $request, User $user)
     {
         $authUser = $this->getUser($request);
-        
+
         $authError = $this->checkAuthorization($authUser, $user);
         if ($authError) {
             return $authError;
@@ -220,7 +238,7 @@ class UserController extends BaseController
         return response()->json(['message' => 'User deleted']);
     }
 
-    // Helper function to check authorization - Changed from private to protected
+    // Helper function to check authorization
     protected function checkAuthorization($authUser, $user)
     {
         if (!$authUser) {

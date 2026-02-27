@@ -66,9 +66,14 @@ Route::middleware('auth.redis')->group(function () {
     Route::put('/schools/{school}/super-admin-update', [SchoolController::class, 'updateBySuperAdmin']);
     Route::post('/schools/{school}/super-admin-update', [SchoolController::class, 'updateBySuperAdmin']);
 
-    // Academic Years
-    Route::apiResource('academic-years', AcademicYearController::class);
+    // ---------------------
+    // ACADEMIC YEAR ROUTES
+    // ---------------------
+    // ⚠️ Specific routes MUST come BEFORE apiResource to avoid route swallowing
+
+    Route::post('/academic-years/bulk', [AcademicYearController::class, 'storeBulk']);
     Route::get('/academic-years/by-curriculum/{curriculum}', [AcademicYearController::class, 'getByCurriculum']);
+    Route::apiResource('academic-years', AcademicYearController::class);
 
     // ---------------------
     // CLASSROOM ROUTES
@@ -117,7 +122,7 @@ Route::middleware('auth.redis')->group(function () {
     // ✅ Teacher combinations endpoint for form dropdown
     Route::get('/teacher-combinations', [TeacherController::class, 'getCombinations']);
 
-    // ✅ FIX 2: Add missing preview route
+    // ✅ Add missing preview route
     Route::get('/teacher-combinations/{id}/preview', [TeacherController::class, 'previewCombination']);
 
     // 2. Routes with {teacherId} parameter
