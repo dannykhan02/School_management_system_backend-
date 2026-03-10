@@ -27,3 +27,7 @@ class ResyncTeacherSpecializations extends Command
         $this->info("✓ Resynced specializations for {$teachers->count()} teacher(s).");
     }
 }
+
+
+// php artisan tinker
+// >>> Mail::raw('Test', fn($m) => $m->to('dannykhan614@gmail.com')->subject('Test'))

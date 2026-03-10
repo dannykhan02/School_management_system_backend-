@@ -11,11 +11,29 @@ use Illuminate\Support\Facades\DB;
 class AcademicYearController extends Controller
 {
     /**
+     * Deactivate all terms whose year is strictly in the past for this school.
+     * Called on index() so the DB stays consistent every time the list is loaded.
+     */
+    private function deactivatePastYears(int $schoolId): void
+    {
+        $currentYear = (int) date('Y');
+
+        AcademicYear::where('school_id', $schoolId)
+            ->whereRaw('CAST(year AS UNSIGNED) < ?', [$currentYear])
+            ->where('is_active', true)
+            ->update(['is_active' => false]);
+    }
+
+    /**
      * Display all academic years for the logged-in user's school.
+     * Auto-deactivates any past-year terms in the DB before returning the list.
      */
     public function index()
     {
         $user = Auth::user();
+
+        // Ensure past years are inactive in the DB before returning data
+        $this->deactivatePastYears($user->school_id);
 
         return AcademicYear::where('school_id', $user->school_id)
             ->orderBy('created_at', 'desc')
@@ -24,6 +42,7 @@ class AcademicYearController extends Controller
 
     /**
      * Create a new academic year (single term).
+     * Enforces is_active = false for past years at the DB level.
      */
     public function store(Request $request)
     {
@@ -57,11 +76,17 @@ class AcademicYearController extends Controller
 
         $validated['school_id'] = $user->school_id;
 
+        // Force inactive for past years regardless of what was sent
+        if ((int) $validated['year'] < (int) date('Y')) {
+            $validated['is_active'] = false;
+        }
+
         return AcademicYear::create($validated);
     }
 
     /**
      * Create multiple terms for a given year in one action.
+     * Enforces is_active = false for all terms when the year is in the past.
      *
      * Expected payload:
      * {
@@ -85,12 +110,12 @@ class AcademicYearController extends Controller
 
         // Top-level validation
         $topRules = [
-            'year'              => 'required|string|max:255',
-            'terms'             => 'required|array|min:1',
-            'terms.*.term'      => 'required|string|max:255',
-            'terms.*.start_date'=> 'nullable|date',
-            'terms.*.end_date'  => 'nullable|date|after_or_equal:terms.*.start_date',
-            'terms.*.is_active' => 'sometimes|boolean',
+            'year'               => 'required|string|max:255',
+            'terms'              => 'required|array|min:1',
+            'terms.*.term'       => 'required|string|max:255',
+            'terms.*.start_date' => 'nullable|date',
+            'terms.*.end_date'   => 'nullable|date|after_or_equal:terms.*.start_date',
+            'terms.*.is_active'  => 'sometimes|boolean',
         ];
 
         if ($school->primary_curriculum === 'Both') {
@@ -105,6 +130,9 @@ class AcademicYearController extends Controller
         $curriculumType = $school->primary_curriculum !== 'Both'
             ? $school->primary_curriculum
             : $validated['curriculum_type'];
+
+        // Past-year flag — if the year has already passed, force all terms inactive
+        $isPastYear = (int) $validated['year'] < (int) date('Y');
 
         // Prevent duplicate terms for the same year in the same school
         $incomingTermNames = array_column($validated['terms'], 'term');
@@ -124,7 +152,7 @@ class AcademicYearController extends Controller
         }
 
         // Build records and insert inside a transaction
-        $created = DB::transaction(function () use ($validated, $user, $curriculumType) {
+        $created = DB::transaction(function () use ($validated, $user, $curriculumType, $isPastYear) {
             $records = [];
 
             foreach ($validated['terms'] as $termData) {
@@ -135,7 +163,8 @@ class AcademicYearController extends Controller
                     'term'            => $termData['term'],
                     'start_date'      => $termData['start_date'] ?? null,
                     'end_date'        => $termData['end_date']   ?? null,
-                    'is_active'       => $termData['is_active']  ?? false,
+                    // Force inactive when the year is already in the past
+                    'is_active'       => $isPastYear ? false : ($termData['is_active'] ?? false),
                 ]);
             }
 
@@ -184,6 +213,7 @@ class AcademicYearController extends Controller
 
     /**
      * Update an academic year.
+     * Prevents re-activating a term that belongs to a past year.
      */
     public function update(Request $request, $id)
     {
@@ -223,6 +253,14 @@ class AcademicYearController extends Controller
 
         if ($school->primary_curriculum !== 'Both') {
             $validated['curriculum_type'] = $school->primary_curriculum;
+        }
+
+        // Determine the effective year (use updated value if provided, otherwise existing)
+        $effectiveYear = (int) ($validated['year'] ?? $academicYear->year);
+
+        // Prevent activating terms from past years
+        if ($effectiveYear < (int) date('Y')) {
+            $validated['is_active'] = false;
         }
 
         $academicYear->update($validated);
